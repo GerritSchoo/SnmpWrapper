@@ -1,0 +1,298 @@
+SNMPWRAPPER-TEST-MIB DEFINITIONS ::= BEGIN
+
+-- Example MIB for the snmpwrap library: a few scalars, one read-write table and one notification.
+-- The OID subtree enterprises.99999 is a PLACEHOLDER. Replace it with your own enterprise number
+-- (https://www.iana.org/assignments/enterprise-numbers) before using a MIB like this in production.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE,
+    Integer32, Unsigned32, Gauge32, Counter32, Counter64, TimeTicks, IpAddress, enterprises
+        FROM SNMPv2-SMI
+    DisplayString, RowStatus
+        FROM SNMPv2-TC;
+
+snmpWrapperTestMIB MODULE-IDENTITY
+    LAST-UPDATED "202610050000Z"
+    ORGANIZATION "snmpwrap example"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Test MIB exercised by the snmpwrap examples and integration tests."
+    REVISION     "202610050000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Scalars: snmpWrapperTestMIB.1.x.0
+-- ---------------------------------------------------------------------------------------------
+
+swtScalars OBJECT IDENTIFIER ::= { snmpWrapperTestMIB 1 }
+
+swtName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..64))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "A writable string."
+    ::= { swtScalars 1 }
+
+swtCounter OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Increases by one every time it is read."
+    ::= { swtScalars 2 }
+
+swtGauge OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Seconds since the agent started, modulo 100."
+    ::= { swtScalars 3 }
+
+swtLimit OBJECT-TYPE
+    SYNTAX      Integer32 (1..100)
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Writable integer; values outside 1..100 are rejected with wrongValue."
+    ::= { swtScalars 4 }
+
+swtUptime OBJECT-TYPE
+    SYNTAX      TimeTicks
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Time since the agent started."
+    ::= { swtScalars 5 }
+
+swtBigCounter OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Constant 4294967297 (needs 64 bit). Not available in SNMPv1."
+    ::= { swtScalars 6 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Table: snmpWrapperTestMIB.2.1.<column>.<swtIndex>
+-- ---------------------------------------------------------------------------------------------
+
+swtTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "A table of named values."
+    ::= { snmpWrapperTestMIB 2 }
+
+swtEntry OBJECT-TYPE
+    SYNTAX      SwtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One row."
+    INDEX       { swtIndex }
+    ::= { swtTable 1 }
+
+SwtEntry ::= SEQUENCE {
+    swtIndex       Integer32,
+    swtEntryName   DisplayString,
+    swtEntryValue  Gauge32,
+    swtEntryStatus INTEGER
+}
+
+swtIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Row index."
+    ::= { swtEntry 1 }
+
+swtEntryName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..32))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Name of the row. The value 'commitfail' makes the example agent fail in the
+                 commit phase (used to test rollback)."
+    ::= { swtEntry 2 }
+
+swtEntryValue OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Value of the row."
+    ::= { swtEntry 3 }
+
+swtEntryStatus OBJECT-TYPE
+    SYNTAX      INTEGER { down(1), up(2), testing(3) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Operational status of the row."
+    ::= { swtEntry 4 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Table with RowStatus: rows are created / destroyed by the manager.
+-- snmpWrapperTestMIB.4.1.<column>.<swtRowIndex>
+-- ---------------------------------------------------------------------------------------------
+
+swtRowTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwtRowEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Rows are created with createAndGo / createAndWait; swtRowName is required."
+    ::= { snmpWrapperTestMIB 4 }
+
+swtRowEntry OBJECT-TYPE
+    SYNTAX      SwtRowEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One row."
+    INDEX       { swtRowIndex }
+    ::= { swtRowTable 1 }
+
+SwtRowEntry ::= SEQUENCE {
+    swtRowIndex  Integer32,
+    swtRowName   DisplayString,
+    swtRowValue  Gauge32,
+    swtRowStatus RowStatus
+}
+
+swtRowIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Row index."
+    ::= { swtRowEntry 1 }
+
+swtRowName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..32))
+    MAX-ACCESS  read-create
+    STATUS      current
+    DESCRIPTION "Name; the row is not complete (notReady) while it is empty. The value
+                 'commitfail' makes the example agent fail in the commit phase (rollback test)."
+    ::= { swtRowEntry 2 }
+
+swtRowValue OBJECT-TYPE
+    SYNTAX      Gauge32 (0..1000)
+    MAX-ACCESS  read-create
+    STATUS      current
+    DESCRIPTION "Value. Optional on creation (DEFVAL)."
+    DEFVAL      { 0 }
+    ::= { swtRowEntry 3 }
+
+swtRowStatus OBJECT-TYPE
+    SYNTAX      RowStatus
+    MAX-ACCESS  read-create
+    STATUS      current
+    DESCRIPTION "Row status."
+    ::= { swtRowEntry 4 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Table with a composite index (IpAddress, port, IMPLIED tag).
+-- snmpWrapperTestMIB.5.1.<column>.<addr>.<port>.<tag octets>
+-- ---------------------------------------------------------------------------------------------
+
+swtConnTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwtConnEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Connections."
+    ::= { snmpWrapperTestMIB 5 }
+
+swtConnEntry OBJECT-TYPE
+    SYNTAX      SwtConnEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One connection."
+    INDEX       { swtConnAddr, swtConnPort, IMPLIED swtConnTag }
+    ::= { swtConnTable 1 }
+
+SwtConnEntry ::= SEQUENCE {
+    swtConnAddr  IpAddress,
+    swtConnPort  Integer32,
+    swtConnTag   DisplayString,
+    swtConnState INTEGER
+}
+
+swtConnAddr OBJECT-TYPE
+    SYNTAX      IpAddress
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Peer address."
+    ::= { swtConnEntry 1 }
+
+swtConnPort OBJECT-TYPE
+    SYNTAX      Integer32 (1..65535)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Peer port."
+    ::= { swtConnEntry 2 }
+
+swtConnTag OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..32))
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Free-form tag (last index column, IMPLIED)."
+    ::= { swtConnEntry 3 }
+
+swtConnState OBJECT-TYPE
+    SYNTAX      INTEGER { closed(1), listen(2), established(3) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Connection state."
+    ::= { swtConnEntry 4 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Large read-only table (example agent option big-table N), served without enumerating rows.
+-- snmpWrapperTestMIB.6.1.<column>.<swtBigIndex>
+-- ---------------------------------------------------------------------------------------------
+
+swtBigTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwtBigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "N rows; row i has index 2*i."
+    ::= { snmpWrapperTestMIB 6 }
+
+swtBigEntry OBJECT-TYPE
+    SYNTAX      SwtBigEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One row."
+    INDEX       { swtBigIndex }
+    ::= { swtBigTable 1 }
+
+SwtBigEntry ::= SEQUENCE {
+    swtBigIndex Unsigned32,
+    swtBigValue Gauge32,
+    swtBigDouble Gauge32
+}
+
+swtBigIndex OBJECT-TYPE
+    SYNTAX      Unsigned32
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Row index."
+    ::= { swtBigEntry 1 }
+
+swtBigValue OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Row number (1..N)."
+    ::= { swtBigEntry 2 }
+
+swtBigDouble OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Twice the row number."
+    ::= { swtBigEntry 3 }
+
+-- ---------------------------------------------------------------------------------------------
+-- Notification: snmpWrapperTestMIB.3.0.1
+-- ---------------------------------------------------------------------------------------------
+
+swtNotifications OBJECT IDENTIFIER ::= { snmpWrapperTestMIB 3 }
+swtNotificationPrefix OBJECT IDENTIFIER ::= { swtNotifications 0 }
+
+swtAlarm NOTIFICATION-TYPE
+    OBJECTS     { swtName, swtLimit }
+    STATUS      current
+    DESCRIPTION "Sent by the example agent on request."
+    ::= { swtNotificationPrefix 1 }
+
+END

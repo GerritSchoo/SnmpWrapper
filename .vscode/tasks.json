@@ -1,0 +1,56 @@
+{
+  // Build / test / demo tasks. Work in both setups:
+  //  - VS Code on Windows (this folder opened from C:\...): the tasks run inside WSL Ubuntu via "wsl"
+  //  - VS Code connected to WSL ("WSL: Reopen Folder in WSL"): the tasks run bash directly
+  // Run with Ctrl+Shift+B (default build task) or Terminal > Run Task...
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "preset",
+      "type": "pickString",
+      "description": "CMake preset",
+      "options": ["debug", "release", "shared"],
+      "default": "debug"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "snmpwrap: build",
+      "type": "shell",
+      "command": "bash scripts/build.sh ${input:preset}",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/build.sh ${input:preset}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
+    },
+    {
+      "label": "snmpwrap: test (all)",
+      "type": "shell",
+      "command": "bash scripts/test.sh ${input:preset}",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/test.sh ${input:preset}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
+    },
+    {
+      "label": "snmpwrap: test (unit + MIB only, no snmpd)",
+      "type": "shell",
+      "command": "bash scripts/test.sh ${input:preset} -E integration",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/test.sh ${input:preset} -E integration" },
+      "group": "test",
+      "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
+    },
+    {
+      "label": "snmpwrap: demo (snmpd + mib_agent + mib_client)",
+      "type": "shell",
+      "command": "bash scripts/demo.sh mib_agent mib_client ${input:preset}",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/demo.sh mib_agent mib_client ${input:preset}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "snmpwrap: demo (snmpd + simple_agent + simple_client)",
+      "type": "shell",
+      "command": "bash scripts/demo.sh simple_agent simple_client ${input:preset}",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/demo.sh simple_agent simple_client ${input:preset}" },
+      "problemMatcher": []
+    }
+  ]
+}

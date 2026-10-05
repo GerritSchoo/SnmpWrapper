@@ -1,0 +1,103 @@
+SNMPWRAPPER-DEMO-MIB DEFINITIONS ::= BEGIN
+
+-- Interface description of the demo device used by examples/mib_agent.cpp and examples/mib_client.cpp
+-- (the same data as examples/simple_agent.cpp, which builds it by hand without a MIB).
+-- enterprises.99999 is a PLACEHOLDER enterprise number.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Integer32, TimeTicks, enterprises
+        FROM SNMPv2-SMI
+    DisplayString, TruthValue
+        FROM SNMPv2-TC;
+
+snmpWrapperDemoMIB MODULE-IDENTITY
+    LAST-UPDATED "202610050000Z"
+    ORGANIZATION "snmpwrap example"
+    CONTACT-INFO "none"
+    DESCRIPTION  "A device with a few temperature sensors."
+    REVISION     "202610050000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 100 }
+
+demoNotifications OBJECT IDENTIFIER ::= { snmpWrapperDemoMIB 0 }
+
+deviceName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (1..32))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Name of the device."
+    ::= { snmpWrapperDemoMIB 1 }
+
+deviceUptime OBJECT-TYPE
+    SYNTAX      TimeTicks
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Time since the device started."
+    ::= { snmpWrapperDemoMIB 2 }
+
+alarmThreshold OBJECT-TYPE
+    SYNTAX      Integer32 (0..100)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "An enabled sensor above this temperature raises sensorAlarm."
+    ::= { snmpWrapperDemoMIB 3 }
+
+sensorTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "The temperature sensors of the device."
+    ::= { snmpWrapperDemoMIB 4 }
+
+sensorEntry OBJECT-TYPE
+    SYNTAX      SensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One sensor."
+    INDEX       { sensorIndex }
+    ::= { sensorTable 1 }
+
+SensorEntry ::= SEQUENCE {
+    sensorIndex   Integer32,
+    sensorName    DisplayString,
+    sensorValue   Integer32,
+    sensorEnabled TruthValue
+}
+
+sensorIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..1000)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Sensor number."
+    ::= { sensorEntry 1 }
+
+sensorName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..16))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Where the sensor sits, e.g. cpu."
+    ::= { sensorEntry 2 }
+
+sensorValue OBJECT-TYPE
+    SYNTAX      Integer32 (-50..150)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Current temperature."
+    ::= { sensorEntry 3 }
+
+sensorEnabled OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Disabled sensors never raise an alarm."
+    ::= { sensorEntry 4 }
+
+sensorAlarm NOTIFICATION-TYPE
+    OBJECTS     { sensorName, sensorValue }
+    STATUS      current
+    DESCRIPTION "An enabled sensor is warmer than alarmThreshold."
+    ::= { demoNotifications 1 }
+
+END

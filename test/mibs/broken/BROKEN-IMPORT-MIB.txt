@@ -1,0 +1,14 @@
+BROKEN-IMPORT-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    OBJECT-TYPE, Integer32, enterprises FROM SNMPv2-SMI
+    someObject FROM NO-SUCH-MODULE-MIB;
+
+brokenImport OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Imports from a module that does not exist."
+    ::= { enterprises 99996 }
+
+END

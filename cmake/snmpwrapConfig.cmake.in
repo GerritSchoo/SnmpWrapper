@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Net-SNMP is linked privately; for a static libsnmpwrap consumers need it as well.
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+find_dependency(NetSNMP)
+list(POP_FRONT CMAKE_MODULE_PATH)
+
+include("${CMAKE_CURRENT_LIST_DIR}/snmpwrapTargets.cmake")
+
+# snmpwrap_add_mib() – generate typed C++ code from MIB files (needs the snmpwrap::mibgen target)
+if(TARGET snmpwrap::mibgen)
+    include("${CMAKE_CURRENT_LIST_DIR}/SnmpwrapMibGen.cmake")
+endif()
+
+check_required_components(snmpwrap)
