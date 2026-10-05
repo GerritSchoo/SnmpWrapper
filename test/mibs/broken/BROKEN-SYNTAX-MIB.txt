@@ -1,0 +1,13 @@
+BROKEN-SYNTAX-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    OBJECT-TYPE, Integer32, enterprises FROM SNMPv2-SMI;
+
+brokenObject OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "The OID assignment below is missing its closing brace."
+    ::= { enterprises 99997
+
+END

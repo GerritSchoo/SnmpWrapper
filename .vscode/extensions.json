@@ -1,0 +1,10 @@
+{
+  // Recommended when working on this project:
+  //  - WSL: open the folder inside Ubuntu, so CMake, the compiler and IntelliSense are the Linux ones
+  //  - CMake Tools + C/C++: configure / build / test / debug from the status bar using CMakePresets.json
+  "recommendations": [
+    "ms-vscode-remote.remote-wsl",
+    "ms-vscode.cmake-tools",
+    "ms-vscode.cpptools"
+  ]
+}

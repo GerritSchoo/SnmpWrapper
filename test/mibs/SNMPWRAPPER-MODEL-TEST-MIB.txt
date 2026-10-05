@@ -1,0 +1,120 @@
+SNMPWRAPPER-MODEL-TEST-MIB DEFINITIONS ::= BEGIN
+
+-- Test-only MIB for the MibModel unit tests: constructs that the example MIB does not use
+-- (AUGMENTS, IMPLIED OBJECT IDENTIFIER index, fixed-size string index, Unsigned32 ranges,
+-- several ranges, UNITS, DEFVAL, TruthValue, an import from another local module).
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Unsigned32, Integer32, enterprises
+        FROM SNMPv2-SMI
+    DisplayString, TruthValue
+        FROM SNMPv2-TC
+    swtRowEntry
+        FROM SNMPWRAPPER-TEST-MIB;
+
+swModelTest MODULE-IDENTITY
+    LAST-UPDATED "202610050000Z"
+    ORGANIZATION "snmpwrap tests"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Unit test MIB."
+    ::= { enterprises 99998 }
+
+swmScalars OBJECT IDENTIFIER ::= { swModelTest 1 }
+
+swmPort OBJECT-TYPE
+    SYNTAX      Unsigned32 (1..65535 | 4000000000..4294967295)
+    UNITS       "port"
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Two ranges, the second one above 2^31."
+    DEFVAL      { 161 }
+    ::= { swmScalars 1 }
+
+swmEnabled OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "TruthValue: true(1), false(2)."
+    ::= { swmScalars 2 }
+
+swmTemperature OBJECT-TYPE
+    SYNTAX      Integer32 (-40..125)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Negative range."
+    ::= { swmScalars 3 }
+
+-- table with IMPLIED OBJECT IDENTIFIER and fixed-size string index
+swmKeyTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwmKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Keyed by a 6-octet MAC address and an implied OID."
+    ::= { swModelTest 2 }
+
+swmKeyEntry OBJECT-TYPE
+    SYNTAX      SwmKeyEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Row."
+    INDEX       { swmKeyMac, IMPLIED swmKeyOid }
+    ::= { swmKeyTable 1 }
+
+SwmKeyEntry ::= SEQUENCE { swmKeyMac OCTET STRING, swmKeyOid OBJECT IDENTIFIER, swmKeyLabel DisplayString }
+
+swmKeyMac OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE (6))
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "MAC address."
+    ::= { swmKeyEntry 1 }
+
+swmKeyOid OBJECT-TYPE
+    SYNTAX      OBJECT IDENTIFIER
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Implied OID."
+    ::= { swmKeyEntry 2 }
+
+swmKeyLabel OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..16))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Label."
+    ::= { swmKeyEntry 3 }
+
+-- AUGMENTS of the RowStatus table of SNMPWRAPPER-TEST-MIB (index taken from there)
+swmRowExtTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF SwmRowExtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Augments swtRowTable."
+    ::= { swModelTest 3 }
+
+swmRowExtEntry OBJECT-TYPE
+    SYNTAX      SwmRowExtEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Row."
+    AUGMENTS    { swtRowEntry }
+    ::= { swmRowExtTable 1 }
+
+SwmRowExtEntry ::= SEQUENCE { swmRowExtComment DisplayString }
+
+swmRowExtComment OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Free comment."
+    ::= { swmRowExtEntry 1 }
+
+swmNotifications OBJECT IDENTIFIER ::= { swModelTest 4 }
+
+swmPortChanged NOTIFICATION-TYPE
+    OBJECTS     { swmPort, swmEnabled }
+    STATUS      current
+    DESCRIPTION "Port changed."
+    ::= { swmNotifications 1 }
+
+END

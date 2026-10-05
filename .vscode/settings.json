@@ -1,0 +1,16 @@
+{
+  // CMake Tools: use CMakePresets.json (presets debug / release / shared)
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  // IntelliSense gets include paths and flags from CMake (compile_commands.json) - works when
+  // VS Code is connected to WSL. On the Windows side the fallback below at least finds the
+  // project's own headers.
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/include",
+    "${workspaceFolder}/generated/**"
+  ],
+  "files.eol": "\n",
+  "files.associations": { "*.txt": "plaintext" }
+}
