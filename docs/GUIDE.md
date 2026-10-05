@@ -184,6 +184,8 @@ A `Value` is a typed SNMP value. Create it with a factory, read it with the matc
 | `Counter64` | `Counter64` | `Value::counter64(1ULL << 40)` | `asUInt64()` |
 | `TimeTicks` | `TimeTicks` | `Value::timeTicks(360000)` | `asUInt()` |
 | `OCTET STRING`, `DisplayString` | `OctetString` | `Value::string("eth0")` | `asString()` |
+| `Opaque` | `Opaque` | `Value::opaque(bytes)` | `asString()` |
+| `BITS` | `Bits` | `Value::bits(octets)` | `asString()` |
 | `OBJECT IDENTIFIER` | `ObjectId` | `Value::oid(Oid{1,3,6})` | `asOid()` |
 | `IpAddress` | `IpAddress` | `Value::ipAddress(10,0,0,1)` | `asIp()` |
 
@@ -344,7 +346,7 @@ MIB types become C++ types like this:
 | `RowStatus` | `snmpwrap::RowStatus` |
 | `Unsigned32`, `Gauge32`, `Counter32`, `TimeTicks` | `std::uint32_t` |
 | `Counter64` | `std::uint64_t` |
-| `OCTET STRING`, `DisplayString`, `BITS`, `Opaque` | `std::string` |
+| `OCTET STRING`, `DisplayString`, `BITS`, `Opaque` | `std::string` (the `Value` keeps the type: `Value::string`, `Value::bits`, `Value::opaque`) |
 | `OBJECT IDENTIFIER` | `snmpwrap::Oid` |
 | `IpAddress` | `std::array<std::uint8_t, 4>` |
 
@@ -731,6 +733,7 @@ snmpset -v2c -c private localhost  S.7 i 6
 | create with a malformed index (if `indexes` is set) | `inconsistentName` |
 | destroy of a non-existing row | success, no-op |
 | notReady row gets its missing data | becomes `notInService` automatically |
+| column of an `active` row changed (only with `RowStatusSpec::rejectEditWhileActive = true`, RFC 2579) | `inconsistentValue`, unless the same request sets `notInService` |
 
 Your `validate` callback is called for the columns of a new row as well, so the same checks apply
 when rows are created.
@@ -1000,6 +1003,9 @@ v3.user = "admin";
 v3.securityLevel = SessionConfig::SecurityLevel::AuthPriv;
 v3.authProtocol = SessionConfig::AuthProtocol::SHA1;    v3.authPassphrase = "authpass123";
 v3.privProtocol = SessionConfig::PrivProtocol::AES128;  v3.privPassphrase = "privpass123";
+// also available: AuthProtocol::MD5 / SHA224 / SHA256 / SHA384 / SHA512 and
+// PrivProtocol::DES / AES192 / AES256 - SHA-2 needs a Net-SNMP built with OpenSSL, AES192/256 needs
+// --enable-blumenthal-aes; otherwise the Client throws an Error when it is created / on the first request
 
 v3.timeout = std::chrono::milliseconds(2000);           // per try
 v3.retries = 2;
@@ -1072,6 +1078,7 @@ this:
 ```sh
 client_cli -v 3 -u admin -l authPriv -a SHA -A authpass123 -x AES -X privpass123 \
            192.168.1.10 walk 1.3.6.1.2.1.1
+# -a MD5|SHA|SHA-224|SHA-256|SHA-384|SHA-512    -x DES|AES|AES-192|AES-256
 client_cli -v 2c -c private localhost set 1.3.6.1.4.1.99999.1.4.0 i 75
 
 # with a MIB: names instead of OIDs, readable output, value types taken from the MIB ("=")
@@ -1222,4 +1229,5 @@ bound yet; bind them, or call `finish(true)` if serving only part of the MIB is 
 **A DEFVAL is not applied on row creation.** Numbers, enumeration labels, strings, hex / binary strings
 (`'00FF'H`, `'0101'B`), IP addresses and OIDs of known names are converted. DEFVALs that cannot be
 converted (e.g. an OID value whose name is not loaded, or BITS given as `{ bitA, bitB }`) are skipped;
-the generated code contains a comment at that place.
+the generated code contains a comment at that place. In the run-time binder (`MibBinder`) such a column
+is treated like one without a default, i.e. it becomes a required column of `createAndGo`.

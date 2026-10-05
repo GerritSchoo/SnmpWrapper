@@ -175,7 +175,7 @@ RowStatus-Tabelle, Tabelle mit zusammengesetztem Index (IpAddress, Port, IMPLIED
 Manuell ausprobieren:
 ```sh
 snmpd -f -Le -C -c test-snmpd.conf     # master agentx, siehe test/run_integration.sh für eine fertige Konfiguration
-build/examples/test_agent --socket tcp:127.0.0.1:705
+build/debug/examples/test_agent --socket tcp:127.0.0.1:705
 snmpwalk -v2c -c public -M +mibs -m +SNMPWRAPPER-TEST-MIB localhost SNMPWRAPPER-TEST-MIB::snmpWrapperTestMIB
 ```
 
@@ -212,8 +212,12 @@ Fehler: `TransportError` (Timeout, Netz, v3-Authentifizierung), `ResponseError` 
 * **v3 authPriv ist in dieser Umgebung nicht verifiziert:** Das lokal gebaute Net-SNMP (`--with-openssl=internal`,
   ohne OpenSSL-Header) beantwortet authPriv/AES auch mit seinen eigenen Tools nicht. Der Test erkennt das und meldet
   SKIP. Mit einem Net-SNMP mit OpenSSL (z. B. Ubuntu-Paket `libsnmp-dev`) läuft dieser Modus automatisch mit.
+* **SHA-2 und AES192/256 (v3):** Der Client kennt SHA-224/256/384/512 und AES-192/256, aber sie funktionieren nur, wenn das
+  verwendete Net-SNMP sie kann (SHA-2: mit OpenSSL gebaut; AES192/256: `--enable-blumenthal-aes`). Sonst meldet der
+  Client einen Fehler. Im lokal gebauten Net-SNMP 5.9.1 dieser Umgebung sind sie nicht verfügbar.
 * Nur AgentX-Subagent (kein eigenständiger Master-Agent). Windows nativ wird nicht unterstützt/getestet.
-* Generator: `BITS` und `Opaque` werden als `std::string` abgebildet; DEFVAL-Formen, die sich nicht in einen Wert
+* `Opaque` und `BITS` haben eigene `Value`-Typen (`Value::opaque`, `Value::bits`), behalten also ihren ASN.1-Typ;
+  Getter müssen sie mit der passenden Factory liefern (nicht `Value::string`). Der Generator bildet beide als `std::string` ab; DEFVAL-Formen, die sich nicht in einen Wert
   übersetzen lassen (z. B. BITS als `{ bitA, bitB }` oder OIDs unbekannter Namen), werden ausgelassen (im generierten
   Code kommentiert); Zahlen, Enum-Labels, Strings, Hex-/Binär-Strings und IP-Adressen werden übernommen. Beim Cross-Kompilieren
   muss `snmpwrap-mibgen` für den Build-Rechner gebaut werden.
