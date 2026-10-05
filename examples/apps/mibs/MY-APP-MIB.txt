@@ -1,0 +1,52 @@
+MY-APP-MIB DEFINITIONS ::= BEGIN
+
+-- Interface of the example applications in examples/apps (agent_app and client_app).
+-- enterprises.99999 is a PLACEHOLDER enterprise number: use your own (https://www.iana.org/assignments/enterprise-numbers).
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Integer32, enterprises
+        FROM SNMPv2-SMI
+    DisplayString
+        FROM SNMPv2-TC;
+
+myAppMIB MODULE-IDENTITY
+    LAST-UPDATED "202610050000Z"
+    ORGANIZATION "snmpwrap example"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Data of a small example application."
+    REVISION     "202610050000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 200 }
+
+myAppNotifications OBJECT IDENTIFIER ::= { myAppMIB 0 }
+
+appName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (1..32))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Name of the application instance."
+    ::= { myAppMIB 1 }
+
+appTemperature OBJECT-TYPE
+    SYNTAX      Integer32 (-50..150)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Current measured temperature."
+    ::= { myAppMIB 2 }
+
+appLimit OBJECT-TYPE
+    SYNTAX      Integer32 (0..100)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "appLimitExceeded is sent when appTemperature rises above this value."
+    ::= { myAppMIB 3 }
+
+appLimitExceeded NOTIFICATION-TYPE
+    OBJECTS     { appTemperature }
+    STATUS      current
+    DESCRIPTION "The temperature is above appLimit."
+    ::= { myAppNotifications 1 }
+
+END

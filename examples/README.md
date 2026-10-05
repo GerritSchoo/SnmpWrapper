@@ -7,6 +7,7 @@
 | [mib_agent.cpp](mib_agent.cpp) | The same device built **from its MIB** ([SNMPWRAPPER-DEMO-MIB](../mibs/SNMPWRAPPER-DEMO-MIB.txt)): CMake generates the code, the program only implements the generated `Instrumentation` interface. **Recommended for products.** |
 | [mib_client.cpp](mib_client.cpp) | Client using the MIB: the generated typed client, plus names / readable output with `MibModel` at run time. |
 | [test_agent.cpp](test_agent.cpp) | Implements the complete example MIB `mibs/SNMPWRAPPER-TEST-MIB.txt` with the core API: RowStatus, composite indexes, large tables, Counter64. Used by the integration test. |
+| [apps/](apps) | **Two separate stand-alone applications** (`agent_app`, `client_app`) with their own `CMakeLists.txt`, built against an *installed* snmpwrap and a shared MIB. Copy one as the skeleton of your own program; explained step by step in [GUIDE.md section 19](../docs/GUIDE.md#19-building-your-own-application-step-by-step). |
 | [client_cli.cpp](client_cli.cpp) | Command line client (`get`, `getnext`, `getbulk`, `walk`, `set`) for v1, v2c and v3; with `-m <mib>` names and MIB-typed values. |
 
 All programs are built together with the library (`cmake --build build`) and end up in `build/examples/`.

@@ -35,6 +35,7 @@ a good starting point before reading on.
 16. [From a MIB file to code – a worked example](#16-from-a-mib-file-to-code--a-worked-example)
 17. [Error codes reference](#17-error-codes-reference)
 18. [Troubleshooting](#18-troubleshooting)
+19. [Building your own application (step by step)](#19-building-your-own-application-step-by-step)
 
 ---
 
@@ -111,6 +112,9 @@ If Net-SNMP is installed in a custom prefix, point CMake to it:
 `cmake -S . -B build -DCMAKE_PREFIX_PATH=/opt/netsnmp` (CMake looks for `net-snmp-config`).
 
 ### Use it from your own CMake project
+
+> A complete step-by-step walk-through with a separate agent and client application is in
+> [section 19](#19-building-your-own-application-step-by-step).
 
 Option A – as a subdirectory (or with `FetchContent`):
 
@@ -1231,3 +1235,232 @@ bound yet; bind them, or call `finish(true)` if serving only part of the MIB is 
 converted (e.g. an OID value whose name is not loaded, or BITS given as `{ bitA, bitB }`) are skipped;
 the generated code contains a comment at that place. In the run-time binder (`MibBinder`) such a column
 is treated like one without a default, i.e. it becomes a required column of `createAndGo`.
+
+---
+
+## 19. Building your own application (step by step)
+
+This chapter is a checklist for building a **separate agent application** and a **separate client
+application** that use snmpwrap. Both are complete, working programs in
+[examples/apps/](../examples/apps): `agent_app` publishes data, `client_app` reads and changes it.
+Each one is a stand-alone CMake project – copy a folder and you have the skeleton of your own program.
+
+```
+examples/apps/
+  mibs/MY-APP-MIB.txt     the interface both programs share
+  agent_app/              CMakeLists.txt + main.cpp   (publishes the data)
+  client_app/             CMakeLists.txt + main.cpp   (reads / changes the data)
+```
+
+### 19.1 Prerequisites (once)
+
+1. Net-SNMP 5.9.x with its development files (`sudo apt install libsnmp-dev snmpd snmp`, or your own
+   build in a custom prefix).
+2. Build and install snmpwrap:
+
+   ```sh
+   cmake --preset debug && cmake --build --preset debug
+   cmake --install build/debug --prefix $HOME/snmpwrap-install
+   ```
+
+3. A running `snmpd` with the AgentX master enabled – only the agent application needs it
+   ([section 1](#1-how-it-works--the-big-picture)). Minimal `snmpd.conf`:
+
+   ```
+   agentaddress udp:127.0.0.1:161
+   rocommunity public  127.0.0.1
+   rwcommunity private 127.0.0.1
+   master agentx
+   agentXSocket tcp:127.0.0.1:705
+   ```
+
+### 19.2 Step 1 – describe your data in a MIB
+
+Everything your application publishes is described once, in a MIB file
+([examples/apps/mibs/MY-APP-MIB.txt](../examples/apps/mibs/MY-APP-MIB.txt)): object names, types,
+ranges, read-only or read-write, and notifications. Agent and client are generated from the same file, so
+they can never disagree.
+
+```
+appName        DisplayString (SIZE (1..32))  read-write   { myAppMIB 1 }
+appTemperature Integer32 (-50..150)          read-only    { myAppMIB 2 }
+appLimit       Integer32 (0..100)            read-write   { myAppMIB 3 }
+appLimitExceeded NOTIFICATION-TYPE  OBJECTS { appTemperature }
+```
+
+* **Use your own enterprise number** instead of the placeholder `99999`.
+* **The file extension does not matter.** `.txt`, `.mib`, `.my` or no extension all work when the file is
+  passed to snmpwrap directly (tested with the generator); what counts is the module name inside the file
+  (`MY-APP-MIB DEFINITIONS ::= BEGIN`).
+* Imported modules (`SNMPv2-SMI`, `SNMPv2-TC`, …) are found in Net-SNMP's own MIB directory. Your own
+  imported MIB files go into a directory that you pass with `MIB_DIRS` (see below).
+
+### 19.3 Step 2 – CMake: let the build generate the C++ code
+
+The same `CMakeLists.txt` works for the agent and for the client (only the program name differs):
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(agent_app CXX)
+
+find_package(snmpwrap REQUIRED)            # provides snmpwrap::snmpwrap and snmpwrap_add_mib()
+
+add_library(my_app_mib STATIC)             # MIB -> C++ at build time, again whenever the MIB changes
+snmpwrap_add_mib(my_app_mib MODULE MY-APP-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/../mibs/MY-APP-MIB.txt)
+# imports from your own MIB files:  snmpwrap_add_mib(... MIB a.txt MIB_DIRS ${CMAKE_SOURCE_DIR}/mibs)
+
+add_executable(agent_app main.cpp)
+target_link_libraries(agent_app PRIVATE my_app_mib)    # brings snmpwrap::snmpwrap along
+```
+
+Configure it and point CMake to the install prefix of snmpwrap (and to Net-SNMP if it is not in a
+system location):
+
+```sh
+cmake -S examples/apps/agent_app -B build-agent -DCMAKE_PREFIX_PATH="$HOME/snmpwrap-install;$HOME/netsnmp"
+cmake --build build-agent
+```
+
+If you embed snmpwrap as a subdirectory instead of installing it, replace `find_package(snmpwrap REQUIRED)`
+with `add_subdirectory(path/to/SnmpWrapper)`; `snmpwrap_add_mib()` is available there as well.
+
+The build creates `my_app_mib.hpp/.cpp` (namespace `my_app_mib`, the module name in snake_case). It contains:
+
+| Generated | Use |
+|---|---|
+| `Instrumentation` | the interface the **agent** implements: `appName()`, `setAppName(...)`, `validateAppLimit(...)`, … |
+| `registerMib(agent, impl)` | registers all objects with the master agent |
+| `sendAppLimitExceeded(agent, temperature)` | sends the notification, typed |
+| `Client` | typed access for the **client**: `appName()`, `setAppLimit(...)`, … |
+| `oids::root`, `oids::appLimit`, … | the OIDs, if you ever need them |
+
+### 19.4 Step 3 – the agent application
+
+Full program: [examples/apps/agent_app/main.cpp](../examples/apps/agent_app/main.cpp). The parts you write:
+
+**a) Your data and a class that implements `Instrumentation`.** One method per MIB object. Read methods
+are called on every GET / walk. Write methods are called on SNMP SET – **that is your "value changed"
+event**; the MIB checks (range, size) have already passed. `validate…` is an optional extra rule.
+
+```cpp
+class MyApp : public my_app_mib::Instrumentation {
+public:
+    std::int32_t appLimit() override { std::lock_guard<std::mutex> l(m_); return limit_; }          // GET
+    void setAppLimit(std::int32_t v) override { std::lock_guard<std::mutex> l(m_); limit_ = v; }    // SET
+    void validateAppLimit(std::int32_t v) override {                                                 // optional
+        if (v < 10) throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10");
+    }
+    // ... appName(), setAppName(), appTemperature() ...
+private:
+    std::mutex m_;       // your other threads and the SNMP callbacks share this data
+    std::int32_t limit_ = 30;
+};
+```
+
+**b) Create the agent, register, run the loop.**
+
+```cpp
+snmpwrap::AgentConfig config;
+config.name = "agent_app";
+config.agentxSocket = "tcp:127.0.0.1:705";      // must match 'agentXSocket' in snmpd.conf
+
+snmpwrap::Agent agent(config);                  // only ONE Agent per process
+MyApp app;
+my_app_mib::registerMib(agent, app);            // `app` must outlive the agent
+
+while (agent.poll()) {                          // answers SNMP requests; returns at least once per second
+    std::int32_t temperature;
+    if (app.takeAlarm(temperature))             // set by your own thread
+        my_app_mib::sendAppLimitExceeded(agent, temperature);   // push a notification to the managers
+}
+```
+
+**c) Stop cleanly.** `agent.stop()` is the one call that is safe from a signal handler or another thread:
+
+```cpp
+snmpwrap::Agent* g_agent = nullptr;
+void onSignal(int) { if (g_agent) g_agent->stop(); }
+// g_agent = &agent;  std::signal(SIGINT, onSignal);  std::signal(SIGTERM, onSignal);
+```
+
+**Rules for the agent application** (details in [section 12](#12-the-main-loop-threads-and-shutdown)):
+
+* `poll()`, `registerMib()` and `sendTrap()` / `send…()` belong to **one thread**. Your callbacks run on
+  that thread too.
+* Other threads change the data only under the mutex. They **never** call snmpwrap; they set a flag or put an
+  event into a queue, and the loop above sends the notification (that is what `takeAlarm()` does).
+* There is no "subscribe" API: the set callback is where you react to a manager's change, the
+  notification is how you tell managers about yours.
+
+### 19.5 Step 4 – the client application
+
+Full program: [examples/apps/client_app/main.cpp](../examples/apps/client_app/main.cpp). It does **not**
+need `snmpd` on its own side – it only talks to some agent.
+
+```cpp
+snmpwrap::SessionConfig cfg;
+cfg.peer = "127.0.0.1:161";                  // host[:port] of the device (the snmpd that serves the agent)
+cfg.community = "private";                   // SNMPv2c; for SNMPv3 see section 13 / 15
+cfg.timeout = std::chrono::milliseconds(2000);
+cfg.retries = 1;
+
+snmpwrap::Client session(cfg);               // one Client per thread
+my_app_mib::Client app(session);             // typed access, generated from the MIB
+
+std::cout << app.appName() << " " << app.appTemperature() << "\n";   // GET
+app.setAppLimit(35);                                                  // SET
+for (const snmpwrap::VarBind& vb : session.walk(my_app_mib::oids::root))   // walk with plain OIDs
+    std::cout << vb.oid.str() << " = " << vb.value.str() << "\n";
+```
+
+Three kinds of errors, each with its own exception type:
+
+| Exception | Meaning | Example in `client_app` |
+|---|---|---|
+| `snmpwrap::TransportError` | no answer, wrong community / SNMPv3 credentials, network | wrong address or `snmpd` not running |
+| `snmpwrap::ResponseError` | the agent answered with an error (`status()`, `index()`) | `setAppLimit(5)` → the agent's rule says ≥ 10 → `wrongValue` |
+| `snmpwrap::SetError` | the MIB check failed locally, nothing was sent | `setAppLimit(500)` → outside 0..100 |
+
+### 19.6 Step 5 – run it
+
+Three terminals:
+
+```sh
+snmpd -f -C -c snmpd.conf -Lo                      # 1. the master agent (see 19.1)
+build-agent/agent_app tcp:127.0.0.1:705            # 2. the agent application
+build-client/client_app 127.0.0.1:161 private      # 3. the client application
+```
+
+Expected output of the client:
+
+```
+appName        = my-app
+appTemperature = 23 degrees Celsius
+appLimit       = 30 degrees Celsius
+appLimit is now 35
+rejected before sending: appLimit: value must be in 0..100
+agent refused: agent returned error: wrongValue (...) (status 10)
+
+walk of 1.3.6.1.4.1.99999.200:
+  1.3.6.1.4.1.99999.200.1.0 = OctetString: "my-app"
+  ...
+```
+
+To see the notification arrive, add `trap2sink 127.0.0.1:11163 public` to `snmpd.conf` and start
+`snmptrapd -f -C -c snmptrapd.conf -Lo udp:127.0.0.1:11163` (with `authCommunity log public` in its config),
+then lower the limit (`snmpset … appLimit.0 i 12`). The agent sends `appLimitExceeded` whenever the temperature
+is above it.
+
+### 19.7 Common mistakes
+
+* **Agent and client in one program:** create the `Agent` first, and call the client from the **agent's
+  thread** only. A client that asks for an OID the same program's agent serves times out, because the thread is
+  blocked in the client call and cannot answer the request that `snmpd` forwards to it. Use two
+  programs (as here), or query a different device.
+* **`No Such Object` for everything:** the agent is not registered. Check that `snmpd.conf` has `master agentx`,
+  that `agentXSocket` matches `AgentConfig::agentxSocket`, and that the agent printed
+  `AgentX subagent connected`.
+* **`noAccess` on SET:** the community has no write permission in `snmpd.conf` (`rwcommunity`). That answer
+  comes from `snmpd`, not from your code.
+* **Build error "snmpwrap not found":** `CMAKE_PREFIX_PATH` has to contain the snmpwrap install prefix.
+* **Several agents on the same OID:** only one program can register a subtree; the second one fails to register.
