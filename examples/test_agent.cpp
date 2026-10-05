@@ -3,6 +3,7 @@
 //
 //   test_agent [--socket tcp:127.0.0.1:705] [--trap-every <seconds>] [--big-table <rows>]
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -17,10 +18,8 @@ using namespace snmpwrap;
 
 namespace {
 
-Agent* g_agent = nullptr;
-void onSignal(int) {
-    if (g_agent) g_agent->stop();
-}
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
+void onSignal(int) { g_stop = true; }
 
 struct Row {
     std::string name;
@@ -74,7 +73,6 @@ int main(int argc, char** argv) {
 
     try {
         Agent agent(config);
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -233,7 +231,7 @@ int main(int argc, char** argv) {
         agent.start();
 
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
-        while (agent.poll()) {
+        while (!g_stop && agent.poll()) {
             if (trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
                 std::lock_guard l(st.mutex);
                 agent.sendTrap(root + SubId{3} + SubId{0} + SubId{1},  // swtAlarm

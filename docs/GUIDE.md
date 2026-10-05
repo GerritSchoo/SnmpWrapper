@@ -230,12 +230,13 @@ rwcommunity private 127.0.0.1
 ### Step 2 – write the agent
 
 ```cpp
+#include <atomic>
 #include <csignal>
 #include <snmpwrap/agent.hpp>
 
 using namespace snmpwrap;
 
-static Agent* g_agent = nullptr;
+static std::atomic<bool> g_stop{false};     // set by Ctrl+C, checked by the loop below
 
 int main() {
     AgentConfig cfg;
@@ -243,8 +244,7 @@ int main() {
     cfg.agentxSocket = "tcp:127.0.0.1:705";
 
     Agent agent(cfg);
-    g_agent = &agent;
-    std::signal(SIGINT, [](int) { g_agent->stop(); });
+    std::signal(SIGINT, [](int) { g_stop = true; });
 
     // Everything below 1.3.6.1.4.1.99999 is ours
     Mib& mib = agent.addMib(Oid::parse("1.3.6.1.4.1.99999"));
@@ -252,7 +252,7 @@ int main() {
     // A read-only scalar: 1.3.6.1.4.1.99999.1.0
     mib.scalar(1, {Type::OctetString, [] { return Value::string("Hello, SNMP!"); }});
 
-    agent.run();   // serve requests until Ctrl+C
+    while (!g_stop && agent.poll()) {}   // serve requests until Ctrl+C (poll() returns at least once per second)
 }
 ```
 
@@ -1368,19 +1368,21 @@ snmpwrap::Agent agent(config);                  // only ONE Agent per process
 MyApp app;
 my_app_mib::registerMib(agent, app);            // `app` must outlive the agent
 
-while (agent.poll()) {                          // answers SNMP requests; returns at least once per second
+while (!g_stop && agent.poll()) {               // answers SNMP requests; returns at least once per second
     std::int32_t temperature;
     if (app.takeAlarm(temperature))             // set by your own thread
         my_app_mib::sendAppLimitExceeded(agent, temperature);   // push a notification to the managers
 }
 ```
 
-**c) Stop cleanly.** `agent.stop()` is the one call that is safe from a signal handler or another thread:
+**c) Stop cleanly.** The signal handler only sets a flag; the loop from (b) checks it. No pointer to the
+`Agent` is needed (`agent.stop()` also exists, for stopping from another thread or when you use `run()`):
 
 ```cpp
-snmpwrap::Agent* g_agent = nullptr;
-void onSignal(int) { if (g_agent) g_agent->stop(); }
-// g_agent = &agent;  std::signal(SIGINT, onSignal);  std::signal(SIGTERM, onSignal);
+std::atomic<bool> g_stop{false};
+void onSignal(int) { g_stop = true; }
+// std::signal(SIGINT, onSignal);  std::signal(SIGTERM, onSignal);
+// while (!g_stop && agent.poll()) { ... }
 ```
 
 **Rules for the agent application** (details in [section 12](#12-the-main-loop-threads-and-shutdown)):

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -111,8 +112,15 @@ void doSet(Registration& reg, int mode, netsnmp_agent_request_info* ari, netsnmp
                     netsnmp_set_request_error(ari, requests, SNMP_ERR_GENERR);
                     return;
                 }
-                auto* h = new TxnHolder{std::move(txn)};
-                netsnmp_agent_add_list_data(ari, netsnmp_create_data_list(key.c_str(), h, freeTxnHolder));
+                auto holder = std::make_unique<TxnHolder>();
+                holder->txn = std::move(txn);
+                netsnmp_data_list* node = netsnmp_create_data_list(key.c_str(), holder.get(), freeTxnHolder);
+                if (!node) {
+                    netsnmp_set_request_error(ari, requests, SNMP_ERR_GENERR);  // holder is freed here
+                    return;
+                }
+                holder.release();  // owned by the list node now; freed by freeTxnHolder together with the request
+                netsnmp_agent_add_list_data(ari, node);
             } catch (const SetError& e) {
                 failSet(ari, requests, e);
             } catch (const std::exception&) {

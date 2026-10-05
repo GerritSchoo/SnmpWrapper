@@ -21,10 +21,8 @@ using namespace std::chrono_literals;
 
 namespace {
 
-snmpwrap::Agent* g_agent = nullptr;
-void onSignal(int) {
-    if (g_agent) g_agent->stop();  // the only Agent call that is safe from a signal handler or another thread
-}
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop (no pointer to the Agent needed)
+void onSignal(int) { g_stop = true; }
 
 /// Your application. The SNMP callbacks below are called by the Agent from the thread that runs poll().
 class MyApp : public my_app_mib::Instrumentation {
@@ -81,7 +79,6 @@ int main(int argc, char** argv) {
 
     try {
         snmpwrap::Agent agent(config);  // only one Agent per process
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -100,7 +97,7 @@ int main(int argc, char** argv) {
         std::cout << "agent_app: serving " << my_app_mib::oids::root.str() << " via " << config.agentxSocket
                   << " (Ctrl+C to stop)" << std::endl;
 
-        while (agent.poll()) {  // handles SNMP requests; returns at least once per second
+        while (!g_stop && agent.poll()) {  // handles SNMP requests; returns at least once per second
             std::int32_t temperature = 0;
             if (app.takeAlarm(temperature)) {
                 my_app_mib::sendAppLimitExceeded(agent, temperature);  // generated, typed notification

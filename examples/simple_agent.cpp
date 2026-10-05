@@ -16,6 +16,7 @@
 //
 //   simple_agent [agentx-socket]          default: tcp:127.0.0.1:705
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <iostream>
@@ -50,11 +51,9 @@ struct Device {
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 };
 
-Agent* g_agent = nullptr;
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
 
-void onSignal(int) {
-    if (g_agent) g_agent->stop();  // stop() is safe to call from a signal handler
-}
+void onSignal(int) { g_stop = true; }
 
 }  // namespace
 
@@ -68,7 +67,6 @@ int main(int argc, char** argv) {
     try {
         // 1) Create the agent (connects to snmpd later, in start()/poll()).
         Agent agent(config);
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -144,7 +142,7 @@ int main(int argc, char** argv) {
 
         auto nextUpdate = std::chrono::steady_clock::now();
         int tick = 0;
-        while (agent.poll()) {                              // handles requests, returns at least once per second
+        while (!g_stop && agent.poll()) {                              // handles requests, returns at least once per second
             if (std::chrono::steady_clock::now() < nextUpdate) continue;
             nextUpdate += std::chrono::seconds(1);
             ++tick;

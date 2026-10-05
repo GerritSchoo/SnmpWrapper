@@ -6,6 +6,7 @@
 // No OIDs, types, ranges or index layouts appear here – they are all in the generated
 // snmpwrapper_test_mib.hpp, which the compiler checks this class against.
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -20,10 +21,8 @@ using snmpwrap::RowStatus;
 
 namespace {
 
-snmpwrap::Agent* g_agent = nullptr;
-void onSignal(int) {
-    if (g_agent) g_agent->stop();
-}
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
+void onSignal(int) { g_stop = true; }
 
 class TestMib : public Instrumentation {
 public:
@@ -156,7 +155,6 @@ int main(int argc, char** argv) {
 
     try {
         snmpwrap::Agent agent(config);
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -166,7 +164,7 @@ int main(int argc, char** argv) {
         std::cerr << "generated test agent connecting to " << config.agentxSocket << "\n";
         agent.start();
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
-        while (agent.poll()) {
+        while (!g_stop && agent.poll()) {
             if (trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
                 sendSwtAlarm(agent, impl.name, impl.limit);  // generated, typed
                 nextTrap += std::chrono::seconds(trapEvery);

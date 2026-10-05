@@ -8,6 +8,7 @@
 // the RowStatus column, DEFVALs, notification objects - is taken from the MIB file; this file only
 // contains the data.
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -21,10 +22,8 @@ using namespace snmpwrap;
 
 namespace {
 
-Agent* g_agent = nullptr;
-void onSignal(int) {
-    if (g_agent) g_agent->stop();
-}
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
+void onSignal(int) { g_stop = true; }
 
 struct Row {
     std::string name;
@@ -75,7 +74,6 @@ int main(int argc, char** argv) {
         MibModel model = MibModel::load({mibDir + "/SNMPWRAPPER-TEST-MIB.txt"});
 
         Agent agent(config);
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -186,7 +184,7 @@ int main(int argc, char** argv) {
         std::cerr << "runtime test agent connecting to " << config.agentxSocket << "\n";
         agent.start();
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
-        while (agent.poll()) {
+        while (!g_stop && agent.poll()) {
             if (trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
                 bind.sendNotification(agent, "swtAlarm", {Value::string(name), Value::integer(limit)});
                 nextTrap += std::chrono::seconds(trapEvery);

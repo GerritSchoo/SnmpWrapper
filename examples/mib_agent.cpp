@@ -6,6 +6,7 @@
 //
 //   mib_agent [agentx-socket]          default: tcp:127.0.0.1:705
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <iostream>
@@ -18,10 +19,8 @@ using namespace snmpwrapper_demo_mib;
 
 namespace {
 
-snmpwrap::Agent* g_agent = nullptr;
-void onSignal(int) {
-    if (g_agent) g_agent->stop();
-}
+std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
+void onSignal(int) { g_stop = true; }
 
 /// The application: a device with three temperature sensors.
 class DemoDevice : public Instrumentation {
@@ -86,7 +85,6 @@ int main(int argc, char** argv) {
 
     try {
         snmpwrap::Agent agent(config);
-        g_agent = &agent;
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -96,7 +94,7 @@ int main(int argc, char** argv) {
         std::cout << "mib_agent: serving SNMPWRAPPER-DEMO-MIB (" << oids::root.str() << ") via " << config.agentxSocket
                   << " (Ctrl+C to stop)" << std::endl;
         auto next = std::chrono::steady_clock::now();
-        while (agent.poll()) {
+        while (!g_stop && agent.poll()) {
             if (std::chrono::steady_clock::now() < next) continue;
             next += std::chrono::seconds(1);
             device.tick(agent);

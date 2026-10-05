@@ -1,5 +1,8 @@
 #include "snmpwrap/client.hpp"
 
+#include <cstdlib>
+#include <memory>
+
 #include "convert.hpp"
 
 namespace snmpwrap {
@@ -10,6 +13,12 @@ struct PduDeleter {
     void operator()(netsnmp_pdu* p) const { snmp_free_pdu(p); }
 };
 using PduPtr = std::unique_ptr<netsnmp_pdu, PduDeleter>;
+
+/// Net-SNMP hands out error texts as malloc'ed memory that the caller must free.
+std::string takeErrorText(char* msg) {
+    std::unique_ptr<char, void (*)(void*)> owner(msg, std::free);
+    return msg ? std::string(msg) : std::string("unknown error");
+}
 
 // SHA-2 (RFC 7860) and AES192/256 (Blumenthal draft) protocol OIDs. Defined here because Net-SNMP only
 // exports its own copies when built with OpenSSL / --enable-blumenthal-aes; if the library lacks the
@@ -66,8 +75,7 @@ struct Client::Impl {
         if (status != STAT_SUCCESS) {
             char* msg = nullptr;
             snmp_sess_error(handle, nullptr, nullptr, &msg);
-            std::string text = msg ? msg : "unknown error";
-            free(msg);
+            const std::string text = takeErrorText(msg);
             throw TransportError("SNMP request to " + config.peer + " failed: " + text);
         }
         if (resp->errstat != SNMP_ERR_NOERROR)
@@ -144,8 +152,7 @@ Client::Client(const SessionConfig& cfg) : impl_(std::make_unique<Impl>()) {
     if (!impl_->handle) {
         char* msg = nullptr;
         snmp_error(&sess, nullptr, nullptr, &msg);
-        std::string text = msg ? msg : "unknown error";
-        free(msg);
+        const std::string text = takeErrorText(msg);
         throw TransportError("cannot open SNMP session to " + cfg.peer + ": " + text);
     }
 }
