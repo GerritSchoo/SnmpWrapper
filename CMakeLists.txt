@@ -22,23 +22,21 @@ find_package(NetSNMP 5.9 REQUIRED)
 
 # --- library --------------------------------------------------------------------------------
 add_library(snmpwrap
-    src/oid.cpp
-    src/value.cpp
-    src/mib.cpp
-    src/index.cpp
-    src/mib_model.cpp
-    src/mib_binder.cpp
-    src/convert.cpp
-    src/agent.cpp
-    src/client.cpp)
+    src/snmpwrap/oid.cpp
+    src/snmpwrap/value.cpp
+    src/snmpwrap/mib.cpp
+    src/snmpwrap/index.cpp
+    src/snmpwrap/mib_model.cpp
+    src/snmpwrap/mib_binder.cpp
+    src/snmpwrap/convert.cpp
+    src/snmpwrap/agent.cpp
+    src/snmpwrap/client.cpp)
 add_library(snmpwrap::snmpwrap ALIAS snmpwrap)
 
 target_include_directories(snmpwrap
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        $<INSTALL_INTERFACE:include>)
 target_compile_features(snmpwrap PUBLIC cxx_std_17)
 set_target_properties(snmpwrap PROPERTIES
     CXX_EXTENSIONS OFF
