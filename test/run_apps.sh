@@ -15,6 +15,7 @@ done
 
 PORT=${SNMPWRAP_APPS_PORT:-11171}
 XPORT=$((PORT + 1))
+NPORT=$((PORT + 2))
 WORK=$(mktemp -d)
 PIDS=()
 cleanup() {
@@ -30,6 +31,7 @@ rocommunity public 127.0.0.1
 rwcommunity private 127.0.0.1
 master agentx
 agentXSocket tcp:127.0.0.1:$XPORT
+trap2sink 127.0.0.1:$NPORT public
 CONF
 export SNMPCONFPATH="$WORK/none" SNMP_PERSISTENT_DIR="$WORK/persist"
 snmpd -f -C -r -c "$WORK/snmpd.conf" -Lf "$WORK/snmpd.log" >/dev/null 2>&1 &
@@ -45,7 +47,7 @@ ready || { echo "agent_app did not register"; cat "$WORK/agent.out"; exit 1; }
 fails=0
 check() { case "$2" in *"$3"*) echo "  ok   $1" ;; *) echo "  FAIL $1 (expected: $3)"; fails=$((fails + 1)) ;; esac; }
 
-out=$("$CLIENT_BIN" "$TARGET" private 2>&1); rc=$?
+out=$("$CLIENT_BIN" "$TARGET" private "udp:127.0.0.1:$NPORT" 2>&1); rc=$?
 printf '%s\n' "$out"
 [ $rc -eq 0 ] && echo "  ok   client_app exit code 0" || { echo "  FAIL client_app exit code $rc"; fails=$((fails + 1)); }
 check "GET scalar"                  "$out" "appName  = my-app"
@@ -58,6 +60,7 @@ check "several values at once"      "$out" "changed together: my-app-2, sensor 2
 check "messages sent"               "$out" "messages sent: limit 25, sensor 1 off"
 check "MIB check before sending"    "$out" "rejected before sending"
 check "agent's own rule (onSet)"    "$out" "agent refused"
+check "notification received"       "$out" "notification appLimitExceeded: board"
 sleep 0.5
 agent=$(cat "$WORK/agent.out")
 check "agent: subtree message"      "$agent" "message appSensors: limit 35"

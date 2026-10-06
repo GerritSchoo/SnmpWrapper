@@ -1045,6 +1045,47 @@ void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::str
 }
 
 // ---------------------------------------------------------------------------------------------
+// received notifications (typed layer on top of snmpwrap::NotificationReceiver)
+// ---------------------------------------------------------------------------------------------
+
+struct NotifField {
+    std::string decl;    // member declaration
+    std::string decode;  // statements inside `for (const auto& vb : n.vars)`
+};
+
+std::vector<NotifField> notificationFields(const MibModel& m, const Module& mod, const MibNode& n) {
+    std::vector<NotifField> out;
+    std::set<std::string> seenIndex;
+    for (const std::string& objName : n.objects) {
+        const MibNode& ob = resolveName(m, n.module, objName);
+        const std::string f = ident(ob.name), oid = "snmpwrap::Oid" + oidInit(ob.oid);
+        const std::string assign = "if (vb.value.type() == " + typeEnum(ob.type) + ") r." + f + " = " + fromValue(ob, "vb.value") + ";";
+        if (ob.kind == MibNodeKind::Column) {
+            const Oid entryOid(std::vector<SubId>(ob.oid.ids().begin(), ob.oid.ids().end() - 1));
+            const Table* t = nullptr;
+            for (const Table& x : mod.tables)
+                if (x.entry->oid == entryOid) t = &x;
+            std::string idxStmt;
+            if (t) {
+                const std::string ip = ident(t->entry->name) + "Index";
+                if (seenIndex.insert(ip).second) out.push_back({"    " + t->indexType + " " + ip + "{};  ///< Row of " + t->table->name + " the column values belong to.", ""});
+                idxStmt = "if (const auto i = " + t->indexType + "::fromOid(" + oid + ".suffixOf(vb.oid))) r." + ip + " = *i;";
+            } else {
+                const std::string ip = f + "Index";
+                out.push_back({"    snmpwrap::Oid " + ip + ";  ///< Row index of " + ob.name + ".", ""});
+                idxStmt = "r." + ip + " = " + oid + ".suffixOf(vb.oid);";
+            }
+            out.push_back({"    " + cppType(ob) + " " + f + "{};  ///< " + ob.name,
+                           "if (" + oid + ".isPrefixOf(vb.oid) && vb.oid.size() > " + oid + ".size()) { " + assign + " " + idxStmt + " continue; }"});
+        } else {
+            out.push_back({"    " + cppType(ob) + " " + f + "{};  ///< " + ob.name,
+                           "if (vb.oid == " + oid + " + snmpwrap::SubId{0}) { " + assign + " continue; }"});
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // header
 // ---------------------------------------------------------------------------------------------
 
@@ -1067,6 +1108,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w();
     w("#include \"snmpwrap/agent.hpp\"");
     w("#include \"snmpwrap/client.hpp\"");
+    w("#include \"snmpwrap/notification.hpp\"");
     w();
     w("/**");
     w(" * @brief Typed C++ interface of the MIB module " + mod.name + ".");
@@ -1466,6 +1508,46 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("};");
         w();
     }
+    // --- received notifications
+    if (!mod.notifications.empty()) {
+        for (const MibNode* n : mod.notifications) {
+            w("/// @brief A received " + n->name + " notification. " + doc(n->description));
+            w("struct " + upperFirst(n->name) + " {");
+            for (const NotifField& f : notificationFields(m, mod, *n)) w(f.decl);
+            w("    snmpwrap::Notification raw;  ///< sender, community, version, uptime, all varbinds");
+            w("};");
+            w();
+        }
+        w("/**");
+        w(" * @brief Typed handlers for the notifications of " + mod.name + ", on top of an snmpwrap::NotificationReceiver.");
+        w(" * @code");
+        w(" * snmpwrap::NotificationReceiver receiver(\"udp:0.0.0.0:1162\");");
+        w(" * " + mod.ns + "::Notifications notifications(receiver);");
+        w(" * notifications." + hookMethod(mod.notifications.front()->name) + "([](const " + mod.ns + "::" + upperFirst(mod.notifications.front()->name) + "& n) { ... });");
+        w(" * while (running) receiver.poll();");
+        w(" * @endcode");
+        w(" * @note Must outlive the receiver's polling. Not copyable.");
+        w(" */");
+        w("class Notifications {");
+        w("public:");
+        w("    /// @brief Registers at the receiver. @param[in] receiver The receiver.");
+        w("    explicit Notifications(snmpwrap::NotificationReceiver& receiver);");
+        w("    Notifications(const Notifications&) = delete;");
+        w("    Notifications& operator=(const Notifications&) = delete;");
+        for (const MibNode* n : mod.notifications) {
+            w("    /// @brief Handler for " + n->name + ". @param[in] handler The handler.");
+            w("    void " + hookMethod(n->name) + "(std::function<void(const " + upperFirst(n->name) + "&)> handler) { h_" + ident(n->name) + "_ = std::move(handler); }");
+        }
+        w("    /// @brief Handler for notifications that are not part of " + mod.name + ". @param[in] handler The handler.");
+        w("    void onOther(std::function<void(const snmpwrap::Notification&)> handler) { other_ = std::move(handler); }");
+        w();
+        w("private:");
+        w("    void dispatch(const snmpwrap::Notification& n);");
+        for (const MibNode* n : mod.notifications) w("    std::function<void(const " + upperFirst(n->name) + "&)> h_" + ident(n->name) + "_;");
+        w("    std::function<void(const snmpwrap::Notification&)> other_;");
+        w("};");
+        w();
+    }
     w("}  // namespace " + mod.ns);
     return w.str();
 }
@@ -1822,6 +1904,32 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w();
         }
     }
+    // received notifications
+    if (!mod.notifications.empty()) {
+        w("Notifications::Notifications(snmpwrap::NotificationReceiver& receiver) {");
+        w("    receiver.onNotification([this](const snmpwrap::Notification& n) { dispatch(n); });");
+        w("}");
+        w();
+        w("void Notifications::dispatch(const snmpwrap::Notification& n) {");
+        for (const MibNode* nt : mod.notifications) {
+            const std::string h = "h_" + ident(nt->name) + "_";
+            w("    if (n.trapOid == snmpwrap::Oid" + oidInit(nt->oid) + ") {");
+            w("        if (!" + h + ") return;");
+            w("        " + upperFirst(nt->name) + " r;");
+            w("        r.raw = n;");
+            w("        for (const auto& vb : n.vars) {");
+            for (const NotifField& f : notificationFields(m, mod, *nt))
+                if (!f.decode.empty()) w("            " + f.decode);
+            w("        }");
+            w("        " + h + "(r);");
+            w("        return;");
+            w("    }");
+        }
+        w("    if (other_) other_(n);");
+        w("}");
+        w();
+    }
+
     // Data model
     if (mod.hasData) {
         w("const char* toString(Object o) noexcept {");

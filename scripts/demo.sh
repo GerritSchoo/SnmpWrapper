@@ -31,6 +31,7 @@ rwuser admin auth
 master agentx
 agentXSocket tcp:127.0.0.1:11162
 trap2sink 127.0.0.1:11163 public
+trap2sink 127.0.0.1:11164 public
 EOF2
 echo "authCommunity log public" > "$WORK/snmptrapd.conf"
 
@@ -47,7 +48,7 @@ sleep 1.5
 
 echo "snmpd on udp:127.0.0.1:11161 (communities public / private, SNMPv3 user admin / authpass123)"
 echo "################ client_app"
-"$CLIENT" 127.0.0.1:11161 private
+"$CLIENT" 127.0.0.1:11161 private udp:127.0.0.1:11164
 echo
 echo "agent_app keeps running - query it from another terminal, e.g.:"
 echo "  snmpwalk -v2c -c public -M +$SNMPWRAP_ROOT/examples/apps/mibs -m +MY-APP-MIB 127.0.0.1:11161 MY-APP-MIB::myAppMIB"

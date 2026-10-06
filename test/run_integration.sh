@@ -20,6 +20,7 @@ done
 PORT=${SNMPWRAP_TEST_PORT:-11161}
 XPORT=$((PORT + 1))
 TPORT=$((PORT + 2))
+NPORT=$((PORT + 3))   # notifications for the EXTRA_CHECK program (snmpwrap::NotificationReceiver)
 BIG_ROWS=3000
 WORK=$(mktemp -d)
 PIDS=()
@@ -47,6 +48,9 @@ master agentx
 agentXSocket tcp:127.0.0.1:$XPORT
 trap2sink 127.0.0.1:$TPORT public
 trapsink 127.0.0.1:$TPORT public
+trap2sink 127.0.0.1:$NPORT public
+trapsink 127.0.0.1:$NPORT public
+informsink 127.0.0.1:$NPORT public
 EOF
 cat > "$WORK/snmptrapd.conf" <<EOF
 authCommunity log public
@@ -332,7 +336,7 @@ expect_contains "timeout is reported" \
 # optional extra program (e.g. the generated typed client); it prints "  ok ..." / "  FAIL ..." lines
 if [ -n "${EXTRA_CHECK:-}" ]; then
     echo "== extra check: $(basename "$EXTRA_CHECK")"
-    extra=$("$EXTRA_CHECK" "$TARGET" 2>&1)
+    extra=$("$EXTRA_CHECK" "$TARGET" "udp:127.0.0.1:$NPORT" 2>&1)
     printf '%s\n' "$extra"
     fails=$((fails + $(printf '%s\n' "$extra" | grep -c '  FAIL ')))
     printf '%s\n' "$extra" | grep -q '  ok ' || { echo "  FAIL extra check produced no results"; fails=$((fails + 1)); }

@@ -1,9 +1,11 @@
 // Checks the generated nested client view (snmpwrapper_test_mib::Remote) against a running agent.
 // Called by run_integration.sh (EXTRA_CHECK) with the agent address; prints "  ok ..." / "  FAIL ..." lines.
 //
-//   remote_client_check <host:port>
+//   remote_client_check <host:port> [notification address]
 
+#include <chrono>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "snmpwrapper_test_mib.hpp"
@@ -28,6 +30,22 @@ int main(int argc, char** argv) {
     try {
         snmpwrap::Client session(cfg);
         Remote remote(session);
+
+        // notifications: listen first, the agent sends swtAlarm every few seconds (as v2c trap, v1 trap and inform)
+        std::unique_ptr<snmpwrap::NotificationReceiver> receiver;
+        std::unique_ptr<Notifications> notifications;
+        int v2 = 0, v1 = 0, informs = 0;
+        bool fieldsOk = true;
+        if (argc > 2) {
+            receiver = std::make_unique<snmpwrap::NotificationReceiver>(argv[2]);
+            notifications = std::make_unique<Notifications>(*receiver);
+            notifications->onSwtAlarm([&](const SwtAlarm& a) {
+                fieldsOk = fieldsOk && !a.swtName.empty() && a.swtLimit >= 1 && a.swtLimit <= 100;
+                if (a.raw.inform) ++informs;
+                else if (a.raw.version == 1) ++v1;
+                else ++v2;
+            });
+        }
 
         // scalars in a group
         const std::int32_t before = remote.swtScalars.swtLimit.get();
@@ -111,6 +129,14 @@ int main(int argc, char** argv) {
         check(remote.swtRowTable[61].swtRowName.get() == "remote", "created row readable");
         remote.swtRowTable.destroy({61});
         check(remote.swtRowTable.read().count({61}) == 0, "destroy removes the row");
+
+        if (receiver) {
+            for (int i = 0; i < 100 && (v2 == 0 || v1 == 0 || informs == 0); ++i) receiver->poll(std::chrono::milliseconds(100));
+            check(v2 > 0, "notification: v2c trap swtAlarm received, typed");
+            check(v1 > 0, "notification: v1 trap converted to swtAlarm");
+            check(informs > 0, "notification: inform received (and acknowledged)");
+            check(fieldsOk, "notification: values decoded (swtName, swtLimit)");
+        }
     } catch (const std::exception& e) {
         check(false, std::string("unexpected exception: ") + e.what());
     }

@@ -1,13 +1,17 @@
 // client_app - an application that reads and changes the data of an SNMP agent (here: agent_app).
 //
-//   client_app [host[:port]] [community]        defaults: 127.0.0.1:161, private
+//   client_app [host[:port]] [community] [notification-address]     defaults: 127.0.0.1:161, private, -
+//   (with a notification address, e.g. udp:127.0.0.1:1162, it also waits for appLimitExceeded from the agent -
+//    snmpd needs 'trap2sink <that address> public')
 //
 // The whole recipe:
 //   1. snmpwrap::Client session(config)       address, version, community / SNMPv3 user
 //   2. my_app_mib::Remote remote(session)     nested like the MIB: remote.group.object.get() / .set(v),
 //                                             whole messages: remote.group.send(msg), remote.table[i].send(row)
 //   3. catch TransportError (no answer), ResponseError (agent refused), SetError (MIB check, nothing sent)
+//   4. notifications from the agent: snmpwrap::NotificationReceiver + my_app_mib::Notifications
 
+#include <chrono>
 #include <iostream>
 #include <string>
 
@@ -76,6 +80,21 @@ int main(int argc, char** argv) {
             remote.appSensors.appLimit.set(5);  // fine for the MIB, but agent_app's own rule says >= 10
         } catch (const snmpwrap::ResponseError& e) {
             std::cout << "agent refused: " << e.what() << "\n";
+        }
+
+        // notifications (agent -> client): make sensor 2 too warm and wait for appLimitExceeded
+        if (argc > 3) {
+            snmpwrap::NotificationReceiver receiver(argv[3]);
+            mib::Notifications notifications(receiver);
+            bool received = false;
+            notifications.onAppLimitExceeded([&](const mib::AppLimitExceeded& n) {
+                std::cout << "notification appLimitExceeded: " << n.appSensorName << " " << n.appSensorTemperature << " C (sensor "
+                          << n.appSensorEntryIndex.appSensorIndex << ")\n";
+                received = true;
+            });
+            remote.change().set(remote.appSensors.appLimit, 15).set(remote.appSensors.appSensorTable[2].appSensorMode, mib::AppSensorMode::on).send();
+            for (int i = 0; i < 50 && !received; ++i) receiver.poll(std::chrono::milliseconds(100));
+            if (!received) std::cout << "no notification within 5 s\n";
         }
     } catch (const snmpwrap::TransportError& e) {
         std::cerr << "no answer from " << cfg.peer << ": " << e.what() << "\n";

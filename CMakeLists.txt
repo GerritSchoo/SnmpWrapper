@@ -29,7 +29,8 @@ add_library(snmpwrap
     src/snmpwrap/mib_model.cpp
     src/snmpwrap/convert.cpp
     src/snmpwrap/agent.cpp
-    src/snmpwrap/client.cpp)
+    src/snmpwrap/client.cpp
+    src/snmpwrap/notification.cpp)
 add_library(snmpwrap::snmpwrap ALIAS snmpwrap)
 
 target_include_directories(snmpwrap
