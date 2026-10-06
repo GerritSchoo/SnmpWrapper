@@ -39,17 +39,10 @@
       "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
     },
     {
-      "label": "snmpwrap: demo (snmpd + mib_agent + mib_client)",
+      "label": "snmpwrap: demo (snmpd + agent_app + client_app)",
       "type": "shell",
-      "command": "bash scripts/demo.sh mib_agent mib_client ${input:preset}",
-      "windows": { "command": "wsl -d Ubuntu -- bash scripts/demo.sh mib_agent mib_client ${input:preset}" },
-      "problemMatcher": []
-    },
-    {
-      "label": "snmpwrap: demo (snmpd + simple_agent + simple_client)",
-      "type": "shell",
-      "command": "bash scripts/demo.sh simple_agent simple_client ${input:preset}",
-      "windows": { "command": "wsl -d Ubuntu -- bash scripts/demo.sh simple_agent simple_client ${input:preset}" },
+      "command": "bash scripts/demo.sh ${input:preset}",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/demo.sh ${input:preset}" },
       "problemMatcher": []
     }
   ]

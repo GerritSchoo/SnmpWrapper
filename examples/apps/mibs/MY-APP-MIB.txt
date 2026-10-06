@@ -2,6 +2,15 @@ MY-APP-MIB DEFINITIONS ::= BEGIN
 
 -- Interface of the example applications in examples/apps (agent_app and client_app).
 -- enterprises.99999 is a PLACEHOLDER enterprise number: use your own (https://www.iana.org/assignments/enterprise-numbers).
+--
+--   myAppMIB
+--   ├── appName                     scalar, read-write
+--   └── appSensors                  group
+--       ├── appLimit                scalar, read-write (0..100)
+--       └── appSensorTable          table, INDEX { appSensorIndex }
+--           ├── appSensorName       read-only
+--           ├── appSensorTemperature read-only
+--           └── appSensorMode       read-write, on(1) / off(2)
 
 IMPORTS
     MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Integer32, enterprises
@@ -10,11 +19,11 @@ IMPORTS
         FROM SNMPv2-TC;
 
 myAppMIB MODULE-IDENTITY
-    LAST-UPDATED "202610050000Z"
+    LAST-UPDATED "202610060000Z"
     ORGANIZATION "snmpwrap example"
     CONTACT-INFO "none"
-    DESCRIPTION  "Data of a small example application."
-    REVISION     "202610050000Z"
+    DESCRIPTION  "Data of a small example application with temperature sensors."
+    REVISION     "202610060000Z"
     DESCRIPTION  "Initial version."
     ::= { enterprises 99999 200 }
 
@@ -27,26 +36,71 @@ appName OBJECT-TYPE
     DESCRIPTION "Name of the application instance."
     ::= { myAppMIB 1 }
 
-appTemperature OBJECT-TYPE
-    SYNTAX      Integer32 (-50..150)
-    UNITS       "degrees Celsius"
-    MAX-ACCESS  read-only
-    STATUS      current
-    DESCRIPTION "Current measured temperature."
-    ::= { myAppMIB 2 }
+appSensors OBJECT IDENTIFIER ::= { myAppMIB 2 }
 
 appLimit OBJECT-TYPE
     SYNTAX      Integer32 (0..100)
     UNITS       "degrees Celsius"
     MAX-ACCESS  read-write
     STATUS      current
-    DESCRIPTION "appLimitExceeded is sent when appTemperature rises above this value."
-    ::= { myAppMIB 3 }
+    DESCRIPTION "appLimitExceeded is sent when a sensor that is on rises above this value."
+    ::= { appSensors 1 }
+
+appSensorTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF AppSensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "The temperature sensors."
+    ::= { appSensors 2 }
+
+appSensorEntry OBJECT-TYPE
+    SYNTAX      AppSensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One sensor."
+    INDEX       { appSensorIndex }
+    ::= { appSensorTable 1 }
+
+AppSensorEntry ::= SEQUENCE {
+    appSensorIndex       Integer32,
+    appSensorName        DisplayString,
+    appSensorTemperature Integer32,
+    appSensorMode        INTEGER
+}
+
+appSensorIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..16)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Sensor number."
+    ::= { appSensorEntry 1 }
+
+appSensorName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..16))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Where the sensor sits."
+    ::= { appSensorEntry 2 }
+
+appSensorTemperature OBJECT-TYPE
+    SYNTAX      Integer32 (-50..150)
+    UNITS       "degrees Celsius"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Current temperature."
+    ::= { appSensorEntry 3 }
+
+appSensorMode OBJECT-TYPE
+    SYNTAX      INTEGER { on(1), off(2) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Sensors that are off never raise appLimitExceeded."
+    ::= { appSensorEntry 4 }
 
 appLimitExceeded NOTIFICATION-TYPE
-    OBJECTS     { appTemperature }
+    OBJECTS     { appSensorName, appSensorTemperature }
     STATUS      current
-    DESCRIPTION "The temperature is above appLimit."
+    DESCRIPTION "A sensor that is on is warmer than appLimit."
     ::= { myAppNotifications 1 }
 
 END

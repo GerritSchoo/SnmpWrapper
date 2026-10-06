@@ -27,7 +27,6 @@ add_library(snmpwrap
     src/snmpwrap/mib.cpp
     src/snmpwrap/index.cpp
     src/snmpwrap/mib_model.cpp
-    src/snmpwrap/mib_binder.cpp
     src/snmpwrap/convert.cpp
     src/snmpwrap/agent.cpp
     src/snmpwrap/client.cpp)
@@ -97,8 +96,6 @@ if(SNMPWRAP_INSTALL)
         install(TARGETS snmpwrap-mibgen EXPORT snmpwrapTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     endif()
     install(DIRECTORY include/snmpwrap DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    install(FILES mibs/SNMPWRAPPER-TEST-MIB.txt mibs/SNMPWRAPPER-DEMO-MIB.txt
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/snmpwrap/mibs)
 
     set(_cfg_dir ${CMAKE_INSTALL_LIBDIR}/cmake/snmpwrap)
     install(EXPORT snmpwrapTargets NAMESPACE snmpwrap:: DESTINATION ${_cfg_dir})

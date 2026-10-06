@@ -17,8 +17,5 @@ function(snmpwrap_mib_library name module mib_file)
     endif()
 endfunction()
 
-# demo device of examples/mib_agent.cpp and examples/mib_client.cpp
-snmpwrap_mib_library(snmpwrapper_demo_mib SNMPWRAPPER-DEMO-MIB ${PROJECT_SOURCE_DIR}/mibs/SNMPWRAPPER-DEMO-MIB.txt)
-
 # example MIB used by the tests (test/agents/generated_*.cpp)
 snmpwrap_mib_library(snmpwrapper_test_mib SNMPWRAPPER-TEST-MIB ${PROJECT_SOURCE_DIR}/mibs/SNMPWRAPPER-TEST-MIB.txt)

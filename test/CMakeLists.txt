@@ -7,10 +7,6 @@ target_link_libraries(snmpwrap_mib_model_tests PRIVATE snmpwrap::snmpwrap)
 target_compile_definitions(snmpwrap_mib_model_tests PRIVATE SNMPWRAP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_test(NAME mib_model COMMAND snmpwrap_mib_model_tests)
 
-add_executable(snmpwrap_mib_binder_tests mib_binder_tests.cpp)
-target_link_libraries(snmpwrap_mib_binder_tests PRIVATE snmpwrap::snmpwrap)
-target_compile_definitions(snmpwrap_mib_binder_tests PRIVATE SNMPWRAP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-add_test(NAME mib_binder COMMAND snmpwrap_mib_binder_tests)
 
 # Generated nested Data structure (groups, tables, DataAgent) for NESTED-TEST-MIB
 if(SNMPWRAP_BUILD_MIBGEN)
@@ -31,13 +27,11 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
     find_program(BASH_EXECUTABLE bash)
     if(BASH_EXECUTABLE)
         # The same suite runs against every implementation of SNMPWRAPPER-TEST-MIB:
-        #   integration          - examples/test_agent.cpp (hand-written OIDs, Mib API)
-        #   integration_runtime  - test/agents/runtime_test_agent.cpp (MIB loaded at run time, MibBinder)
-        add_executable(runtime_test_agent agents/runtime_test_agent.cpp)
-        target_link_libraries(runtime_test_agent PRIVATE snmpwrap::snmpwrap)
-        target_compile_definitions(runtime_test_agent PRIVATE SNMPWRAP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+        #   integration          - test/agents/test_agent.cpp (hand-written OIDs, core Mib API)
+        add_executable(test_agent agents/test_agent.cpp)
+        target_link_libraries(test_agent PRIVATE snmpwrap::snmpwrap)
 
-        set(variants "integration:test_agent" "integration_runtime:runtime_test_agent")
+        set(variants "integration:test_agent")
 
         #   integration_generated - test/agents/generated_test_agent.cpp (code generated from the MIB at build time)
         #                           + the generated typed client (generated_client_check)
@@ -67,6 +61,13 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
             # all variants use the same local ports
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 120 RESOURCE_LOCK snmpd_ports)
         endforeach()
+        # example applications (examples/apps): agent_app + client_app against a private snmpd
+        if(TARGET agent_app AND TARGET client_app)
+            add_test(NAME apps
+                COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_apps.sh
+                        $<TARGET_FILE:agent_app> $<TARGET_FILE:client_app> ${NetSNMP_PREFIX})
+            set_tests_properties(apps PROPERTIES TIMEOUT 60 RESOURCE_LOCK snmpd_ports)
+        endif()
         if(TARGET generated_client_check)
             set_property(TEST integration_generated PROPERTY ENVIRONMENT "EXTRA_CHECK=$<TARGET_FILE:generated_client_check>")
             set_property(TEST integration_data PROPERTY ENVIRONMENT "EXTRA_CHECK=$<TARGET_FILE:remote_client_check>")

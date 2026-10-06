@@ -2,10 +2,9 @@
  * @file mib_model.hpp
  * @brief Reads MIB files (with Net-SNMP's MIB parser) into a C++ model of the interface description.
  *
- * The MibModel is the common basis of the MIB-driven features:
- * - MibBinder binds application data to MIB objects by name at run time (mib_binder.hpp),
- * - the code generator `snmpwrap-mibgen` generates typed C++ code from it at build time,
- * - clients use it to resolve names, format values and parse values (resolve(), format(), parseValue()).
+ * The MibModel is the basis of the code generator `snmpwrap-mibgen`, which generates typed C++ code
+ * from it at build time. Tools can also use it to resolve names, format values and parse values
+ * (resolve(), format(), parseValue()), e.g. `client_cli -m`.
  *
  * @code
  * MibModel model = MibModel::load({"mibs/SNMPWRAPPER-TEST-MIB.txt"});
