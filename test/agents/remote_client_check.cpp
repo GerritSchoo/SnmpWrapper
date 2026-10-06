@@ -56,6 +56,15 @@ int main(int argc, char** argv) {
         check(remote.swtConnTable[{{10, 0, 0, 1}, 80, "web"}].swtConnState.get() == SwtConnState::established,
               "swtConnTable[(10.0.0.1, 80, 'web')]");
 
+        // everything at once into a Data structure (one walk)
+        const Data snapshot = remote.read();
+        check(snapshot.swtScalars.swtName == remote.swtScalars.swtName.get(), "read(): scalar in a group");
+        check(snapshot.swtTable.size() == 3 && snapshot.swtTable.at(SwtEntryIndex{2}).swtEntryValue == 200, "read(): table rows");
+        check(snapshot.swtConnTable.at(SwtConnEntryIndex{{10, 0, 0, 2}, 22, "ssh"}).swtConnState == SwtConnState::established,
+              "read(): composite index");
+        check(snapshot.swtBigTable.size() > 1000, "read(): big table (" + std::to_string(snapshot.swtBigTable.size()) + " rows)");
+        check(snapshot.swtScalars.swtBigCounter == 4294967297ULL, "read(): Counter64");
+
         // RowStatus table
         SwtRowEntryValues values;
         values.swtRowName = "remote";

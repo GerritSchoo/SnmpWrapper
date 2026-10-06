@@ -35,6 +35,11 @@ int main(int argc, char** argv) {
                       << " C, " << mib::toString(row.appSensorMode) << "\n";
         std::cout << "sensor 1 is " << remote.appSensors.appSensorTable[1].appSensorName.get() << "\n";
 
+        // everything at once: one walk into the same Data structure the agent uses
+        const mib::Data snapshot = remote.read();
+        std::cout << "snapshot: " << snapshot.appName << ", limit " << snapshot.appSensors.appLimit << ", "
+                  << snapshot.appSensors.appSensorTable.size() << " sensors\n";
+
         // SET (checked against the MIB first)
         remote.appSensors.appLimit.set(35);
         std::cout << "appLimit is now " << remote.appSensors.appLimit.get() << "\n";

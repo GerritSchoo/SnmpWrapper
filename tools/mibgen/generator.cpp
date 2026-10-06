@@ -813,7 +813,7 @@ void emitRemoteTable(W& w, const Table& t) {
     std::string init;
     for (const MibNode* c : t.columns) init += ident(c->name) + "(c, index), ";
     if (t.rowStatus) init += ident(t.rowStatus->name) + "(c, index), ";
-    init += "index_(index)";
+    init += "index_(index), c_(&c)";
     w("/// @brief One row of " + t.table->name + " on the remote agent: every cell has get() and, if writable, set().");
     w("class " + row + " {");
     w("public:");
@@ -827,16 +827,13 @@ void emitRemoteTable(W& w, const Table& t) {
     w();
     w("    /// @brief The row index. @return The index this row is bound to.");
     w("    const " + t.indexType + "& index() const { return index_; }");
-    w("    /// @brief Reads every column of the row (one GET per column). @return The row.");
-    w("    " + t.entryType + " read() const {");
-    w("        " + t.entryType + " e;");
-    for (const MibNode* c : t.columns) w("        e." + ident(c->name) + " = " + ident(c->name) + ".get();");
-    if (t.rowStatus) w("        e." + ident(t.rowStatus->name) + " = " + ident(t.rowStatus->name) + ".get();");
-    w("        return e;");
-    w("    }");
+    w("    /// @brief Reads every column of the row in ONE request. @return The row.");
+    w("    /// @throws snmpwrap::Error if the row does not exist, snmpwrap::TransportError, snmpwrap::ResponseError");
+    w("    " + t.entryType + " read() const;");
     w();
     w("private:");
     w("    " + t.indexType + " index_;");
+    w("    Client* c_;");
     w("};");
     w();
     // table proxy
@@ -866,6 +863,14 @@ void emitRemoteTable(W& w, const Table& t) {
     w("    Client* c_;");
     w("};");
     w();
+}
+
+/// C++ access path of every scalar / table inside Data, e.g. "appSensors.appLimit".
+void collectPaths(const Module& mod, const Group& g, const std::string& prefix, std::map<const MibNode*, std::string>& scalars,
+                  std::map<std::size_t, std::string>& tables) {
+    for (const MibNode* n : g.scalars) scalars[n] = prefix + memberName(n->name);
+    for (std::size_t i : g.tables) tables[i] = prefix + memberName(mod.tables[i].table->name);
+    for (const Group& c : g.children) collectPaths(mod, c, prefix + c.member + ".", scalars, tables);
 }
 
 /// Members and nested group structs of Remote; `init` collects the member initializers in declaration order.
@@ -1116,6 +1121,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w("public:");
     w("    /// @brief Wraps a session. @param[in] client Open session; must outlive this object.");
     w("    explicit Client(snmpwrap::Client& client) : c_(client) {}");
+    w("    /// @brief The session underneath. @return The session passed to the constructor.");
+    w("    snmpwrap::Client& session() { return c_; }");
     for (const MibNode* n : mod.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name);
         w();
@@ -1272,6 +1279,10 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    explicit Remote(snmpwrap::Client& session) : " + list + " {}");
         w("    Remote(const Remote&) = delete;");
         w("    Remote& operator=(const Remote&) = delete;");
+        w();
+        w("    /// @brief Reads every value of " + mod.name + " from the agent in one walk (GETBULK on v2c/v3) into a Data structure.");
+        w("    /// @return All scalars and table rows the agent has. @throws snmpwrap::TransportError, snmpwrap::ResponseError");
+        w("    Data read();");
         w();
         const std::string b = body.str();
         w(b.substr(0, b.empty() ? 0 : b.size() - 1));
@@ -1659,6 +1670,71 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w();
         emitImpl(w, mod, mod.data, "");
         w("};");
+        w();
+        // Remote: a whole row in one GET
+        for (const Table& t : mod.tables) {
+            w(t.entryType + " " + remoteRowType(t) + "::read() const {");
+            w("    const snmpwrap::Oid idx = index_.toOid();");
+            std::string oidsList;
+            std::vector<const MibNode*> cols(t.columns.begin(), t.columns.end());
+            if (t.rowStatus) cols.push_back(t.rowStatus);
+            for (std::size_t i = 0; i < cols.size(); ++i) oidsList += (i ? ", " : "") + std::string("oids::") + ident(cols[i]->name) + " + idx";
+            w("    const std::vector<snmpwrap::VarBind> vbs = c_->session().get(std::vector<snmpwrap::Oid>{" + oidsList + "});");
+            w("    if (vbs.size() != " + std::to_string(cols.size()) + ") throw snmpwrap::Error(\"" + t.table->name + ": unexpected answer\");");
+            w("    " + t.entryType + " e;");
+            for (std::size_t i = 0; i < cols.size(); ++i) {
+                const MibNode* c = cols[i];
+                const std::string at = "vbs[" + std::to_string(i) + "]";
+                if (c == t.rowStatus)
+                    w("    e." + ident(c->name) + " = static_cast<snmpwrap::RowStatus>(expect(" + at + ", snmpwrap::Type::Integer, \"" + c->name + "\").asInt());");
+                else
+                    w("    e." + ident(c->name) + " = " + fromValue(*c, "expect(" + at + ", " + typeEnum(c->type) + ", \"" + c->name + "\")") + ";");
+            }
+            w("    return e;");
+            w("}");
+            w();
+        }
+        // Remote: everything into a Data
+        std::map<const MibNode*, std::string> scalarPaths;
+        std::map<std::size_t, std::string> tablePaths;
+        collectPaths(mod, mod.data, "", scalarPaths, tablePaths);
+        w("Data Remote::read() {");
+        w("    Data d;");
+        w("    flat_.session().walk(oids::root, [&d](const snmpwrap::VarBind& vb) {");
+        w("        if (vb.value.isException()) return true;");
+        for (const MibNode* n : mod.scalars) {
+            w("        if (vb.oid == oids::" + ident(n->name) + " + snmpwrap::SubId{0}) {");
+            w("            if (vb.value.type() == " + typeEnum(n->type) + ") d." + scalarPaths[n] + " = " + fromValue(*n, "vb.value") + ";");
+            w("            return true;");
+            w("        }");
+        }
+        for (std::size_t ti = 0; ti < mod.tables.size(); ++ti) {
+            const Table& t = mod.tables[ti];
+            const std::string entry = "oids::" + ident(t.entry->name);
+            w("        if (" + entry + ".isPrefixOf(vb.oid) && vb.oid.size() > " + entry + ".size() + 1) {");
+            w("            const auto i = " + t.indexType + "::fromOid(cellIndex(" + entry + ", vb.oid));");
+            w("            if (!i) return true;");
+            w("            " + t.entryType + "& row = d." + tablePaths[ti] + "[*i];");
+            w("            switch (vb.oid[" + entry + ".size()]) {");
+            for (const MibNode* c : t.columns) {
+                w("                case " + std::to_string(c->oid.ids().back()) + ":");
+                w("                    if (vb.value.type() == " + typeEnum(c->type) + ") row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
+                w("                    break;");
+            }
+            if (t.rowStatus) {
+                w("                case " + std::to_string(t.rowStatus->oid.ids().back()) + ":");
+                w("                    if (vb.value.type() == snmpwrap::Type::Integer) row." + ident(t.rowStatus->name) + " = static_cast<snmpwrap::RowStatus>(vb.value.asInt());");
+                w("                    break;");
+            }
+            w("                default: break;");
+            w("            }");
+            w("            return true;");
+            w("        }");
+        }
+        w("        return true;");
+        w("    });");
+        w("    return d;");
+        w("}");
         w();
         w("DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {");
         w("    registerMib(agent, *impl_);");
