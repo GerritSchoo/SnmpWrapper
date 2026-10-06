@@ -261,7 +261,8 @@ struct Module {
     std::string name, ns;
     Oid root;
     bool hasRoot = false;
-    Group data;                           // root of the group tree (below the registration root)
+    Oid dataRoot;                         // where Data / Remote start: the module node if it is above every object, else root
+    Group data;                           // root of the group tree (below dataRoot)
     bool hasData = false;                 // Data / DataAgent are generated
     std::vector<const MibNode*> all, scalars, notifications;
     std::vector<Table> tables;
@@ -282,10 +283,10 @@ std::string memberName(const std::string& mibName) {
 
 /// Puts a scalar or table into the group chain given by the OIDs between the registration root and the object.
 void placeInGroup(const MibModel& m, Module& mod, const MibNode& n, bool isTable, std::size_t tableIndex) {
-    if (!mod.root.isPrefixOf(n.oid) || n.oid.size() <= mod.root.size())
-        throw Error("object '" + n.name + "' is not below the registration root " + mod.root.str());
+    if (!mod.dataRoot.isPrefixOf(n.oid) || n.oid.size() <= mod.dataRoot.size())
+        throw Error("object '" + n.name + "' is not below " + mod.dataRoot.str());
     Group* g = &mod.data;
-    for (std::size_t k = mod.root.size(); k + 1 < n.oid.size(); ++k) {
+    for (std::size_t k = mod.dataRoot.size(); k + 1 < n.oid.size(); ++k) {
         const SubId sid = n.oid[k];
         auto it = std::find_if(g->children.begin(), g->children.end(), [sid](const Group& c) { return c.subid == sid; });
         if (it == g->children.end()) {
@@ -404,6 +405,14 @@ Module collect(const MibModel& m, const Options& o) {
 
     // group tree for the Data type
     if (mod.hasRoot && (!mod.scalars.empty() || !mod.tables.empty())) {
+        // The structure starts at the module's top node (usually its MODULE-IDENTITY), so that a group stays a group
+        // even when every object of the module lives inside it. The registration root is the deepest common prefix.
+        mod.dataRoot = mod.root;
+        const Oid& top = mod.all.front()->oid;  // nodes are sorted by OID
+        bool above = top.size() < mod.root.size();
+        for (const MibNode* n : mod.scalars) above = above && top.isPrefixOf(n->oid);
+        for (const Table& t : mod.tables) above = above && top.isPrefixOf(t.table->oid);
+        if (above) mod.dataRoot = top;
         for (const MibNode* n : mod.scalars) placeInGroup(m, mod, *n, false, 0);
         for (std::size_t i = 0; i < mod.tables.size(); ++i) placeInGroup(m, mod, *mod.tables[i].table, true, i);
         sortGroups(mod.data);

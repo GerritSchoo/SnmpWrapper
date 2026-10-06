@@ -1,0 +1,37 @@
+NESTED-GROUP-MIB DEFINITIONS ::= BEGIN
+
+-- Every object lives in ONE group and uses types from another MIB (NESTED-TYPES-MIB):
+-- the generated structure must still be data.attitude.<object>.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, enterprises
+        FROM SNMPv2-SMI
+    Angle, SensorKind
+        FROM NESTED-TYPES-MIB;
+
+nestedGroup MODULE-IDENTITY
+    LAST-UPDATED "202610060000Z"
+    ORGANIZATION "snmpwrap test"
+    CONTACT-INFO "none"
+    DESCRIPTION  "A single group with imported types."
+    REVISION     "202610060000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 311 }
+
+attitude OBJECT IDENTIFIER ::= { nestedGroup 1 }
+
+boatRoll OBJECT-TYPE
+    SYNTAX      Angle
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Roll angle."
+    ::= { attitude 1 }
+
+boatRollSensor OBJECT-TYPE
+    SYNTAX      SensorKind
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Kind of the roll sensor."
+    ::= { attitude 2 }
+
+END

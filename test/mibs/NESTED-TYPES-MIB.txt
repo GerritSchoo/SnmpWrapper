@@ -1,0 +1,31 @@
+NESTED-TYPES-MIB DEFINITIONS ::= BEGIN
+
+-- Shared types (TEXTUAL-CONVENTIONs) imported by NESTED-GROUP-MIB: a range and named numbers defined in another module.
+
+IMPORTS
+    MODULE-IDENTITY, Integer32, enterprises
+        FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION
+        FROM SNMPv2-TC;
+
+nestedTypes MODULE-IDENTITY
+    LAST-UPDATED "202610060000Z"
+    ORGANIZATION "snmpwrap test"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Shared types."
+    REVISION     "202610060000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 310 }
+
+Angle ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d-1"
+    STATUS       current
+    DESCRIPTION  "Angle in tenths of a degree."
+    SYNTAX       Integer32 (-1800..1800)
+
+SensorKind ::= TEXTUAL-CONVENTION
+    STATUS       current
+    DESCRIPTION  "Kind of sensor."
+    SYNTAX       INTEGER { gyro(1), compass(2), gps(3) }
+
+END

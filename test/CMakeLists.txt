@@ -14,12 +14,17 @@ if(SNMPWRAP_BUILD_MIBGEN)
     snmpwrap_add_mib(snmpwrapper_test_mib MODULE SNMPWRAPPER-TEST-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/mibs/SNMPWRAPPER-TEST-MIB.txt)
     add_library(nested_test_mib STATIC)
     snmpwrap_add_mib(nested_test_mib MODULE NESTED-TEST-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/mibs/NESTED-TEST-MIB.txt)
+    # types from another MIB of our own (found through MIB_DIRS), every object inside one group
+    add_library(nested_group_mib STATIC)
+    snmpwrap_add_mib(nested_group_mib MODULE NESTED-GROUP-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/mibs/NESTED-GROUP-MIB.txt
+                     MIB_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/mibs)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(snmpwrapper_test_mib PRIVATE -Wall -Wextra -Wpedantic)
         target_compile_options(nested_test_mib PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(nested_group_mib PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_executable(snmpwrap_data_model_tests data_model_tests.cpp)
-    target_link_libraries(snmpwrap_data_model_tests PRIVATE nested_test_mib)
+    target_link_libraries(snmpwrap_data_model_tests PRIVATE nested_test_mib nested_group_mib)
     add_test(NAME data_model COMMAND snmpwrap_data_model_tests)
 endif()
 

@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "nested_test_mib.hpp"  // generated from test/mibs/NESTED-TEST-MIB.txt
+#include "nested_group_mib.hpp"  // generated from test/mibs/NESTED-GROUP-MIB.txt (types from NESTED-TYPES-MIB)
+#include "nested_test_mib.hpp"   // generated from test/mibs/NESTED-TEST-MIB.txt
 
 namespace m = nested_test_mib;
 using namespace snmpwrap;
@@ -290,6 +291,22 @@ void testRowCompleteness() {
     CHECK(!trySet(s.mib, {{cell(m::oids::extendedPitchStatus, m::ExtendedPitchEntryIndex{6, "app"}.toOid()), Value::integer(1)}}));
 }
 
+void testImportedTypesAndSingleGroup() {
+    namespace g = nested_group_mib;
+    g::Data d;
+    d.attitude.boatRoll = 5000;  // the group survives although every object is inside it
+    d.attitude.boatRollSensor = g::SensorKind::compass;  // named numbers of a TEXTUAL-CONVENTION from another MIB
+    const auto bad = d.validate();
+    CHECK(bad.size() == 1 && mentions(bad, "attitude.boatRoll: value must be in -1800..1800"));  // range of the imported TC
+
+    Mib mib{g::oids::root};
+    g::DataAgent adapter{mib, d};
+    CHECK(failsWith(trySet(mib, {{g::oids::boatRollSensor + SubId{0}, Value::integer(4)}}), ErrorStatus::WrongValue, 0));
+    CHECK(!trySet(mib, {{g::oids::boatRoll + SubId{0}, Value::integer(-900)}}));
+    CHECK(d.attitude.boatRoll == -900);
+    CHECK(std::string(g::toString(g::SensorKind::gps)) == "gps");
+}
+
 void testLock() {
     Served s;
     {
@@ -311,6 +328,7 @@ int main() {
     testHook();
     testGetHook();
     testRowCompleteness();
+    testImportedTypesAndSingleGroup();
     testLock();
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
     return g_failures == 0 ? 0 : 1;
