@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "snmpwrap/agent.hpp"
@@ -617,6 +618,253 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+};
+
+/// @brief Building blocks of Remote: accessors bound to one object (and row) of the remote agent.
+namespace remote_detail {
+
+/// @brief Read-only scalar.
+template <auto Get>
+class RoScalar {
+public:
+    explicit RoScalar(Client& c) : c_(&c) {}
+    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError
+    auto get() const { return (c_->*Get)(); }
+
+protected:
+    Client* c_;
+};
+
+/// @brief Writable scalar.
+template <auto Get, auto Set>
+class RwScalar : public RoScalar<Get> {
+public:
+    using RoScalar<Get>::RoScalar;
+    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.
+    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError
+    template <class V>
+    void set(V&& value) const { (this->c_->*Set)(std::forward<V>(value)); }
+};
+
+/// @brief Read-only table cell.
+template <class Index, auto Get>
+class RoCell {
+public:
+    RoCell(Client& c, const Index& index) : c_(&c), index_(index) {}
+    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError
+    auto get() const { return (c_->*Get)(index_); }
+
+protected:
+    Client* c_;
+    Index index_;
+};
+
+/// @brief Writable table cell.
+template <class Index, auto Get, auto Set>
+class RwCell : public RoCell<Index, Get> {
+public:
+    using RoCell<Index, Get>::RoCell;
+    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.
+    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError
+    template <class V>
+    void set(V&& value) const { (this->c_->*Set)(this->index_, std::forward<V>(value)); }
+};
+
+}  // namespace remote_detail
+
+/// @brief One row of swtTable on the remote agent: every cell has get() and, if writable, set().
+class SwtEntryRow {
+public:
+    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.
+    SwtEntryRow(Client& c, const SwtEntryIndex& index) : swtEntryName(c, index), swtEntryValue(c, index), swtEntryStatus(c, index), index_(index) {}
+
+    remote_detail::RwCell<SwtEntryIndex, &Client::swtEntryName, &Client::setSwtEntryName> swtEntryName;  ///< swtEntryName (read-write, DisplayString SIZE(0..32))
+    remote_detail::RwCell<SwtEntryIndex, &Client::swtEntryValue, &Client::setSwtEntryValue> swtEntryValue;  ///< swtEntryValue (read-write, Gauge32)
+    remote_detail::RwCell<SwtEntryIndex, &Client::swtEntryStatus, &Client::setSwtEntryStatus> swtEntryStatus;  ///< swtEntryStatus (read-write, Integer)
+
+    /// @brief The row index. @return The index this row is bound to.
+    const SwtEntryIndex& index() const { return index_; }
+    /// @brief Reads every column of the row (one GET per column). @return The row.
+    SwtEntry read() const {
+        SwtEntry e;
+        e.swtEntryName = swtEntryName.get();
+        e.swtEntryValue = swtEntryValue.get();
+        e.swtEntryStatus = swtEntryStatus.get();
+        return e;
+    }
+
+private:
+    SwtEntryIndex index_;
+};
+
+/// @brief swtTable on the remote agent: table[index] gives a row, read() fetches the whole table.
+class SwtEntryRemoteTable {
+public:
+    explicit SwtEntryRemoteTable(Client& c) : c_(&c) {}
+    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.
+    SwtEntryRow operator[](const SwtEntryIndex& index) const { return SwtEntryRow(*c_, index); }
+    /// @brief Row access with a plain index number. @param[in] swtIndex Row index. @return The row.
+    SwtEntryRow operator[](std::int32_t swtIndex) const { return (*this)[SwtEntryIndex{swtIndex}]; }
+    /// @brief Reads the whole table (walk). @return All rows by index.
+    std::map<SwtEntryIndex, SwtEntry> read() const { return c_->swtTable(); }
+
+private:
+    Client* c_;
+};
+
+/// @brief One row of swtRowTable on the remote agent: every cell has get() and, if writable, set().
+class SwtRowEntryRow {
+public:
+    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.
+    SwtRowEntryRow(Client& c, const SwtRowEntryIndex& index) : swtRowName(c, index), swtRowValue(c, index), swtRowStatus(c, index), index_(index) {}
+
+    remote_detail::RwCell<SwtRowEntryIndex, &Client::swtRowName, &Client::setSwtRowName> swtRowName;  ///< swtRowName (read-create, DisplayString SIZE(0..32))
+    remote_detail::RwCell<SwtRowEntryIndex, &Client::swtRowValue, &Client::setSwtRowValue> swtRowValue;  ///< swtRowValue (read-create, Gauge32 (0..1000))
+    remote_detail::RwCell<SwtRowEntryIndex, &Client::swtRowStatus, &Client::setSwtRowStatus> swtRowStatus;  ///< swtRowStatus (RowStatus)
+
+    /// @brief The row index. @return The index this row is bound to.
+    const SwtRowEntryIndex& index() const { return index_; }
+    /// @brief Reads every column of the row (one GET per column). @return The row.
+    SwtRowEntry read() const {
+        SwtRowEntry e;
+        e.swtRowName = swtRowName.get();
+        e.swtRowValue = swtRowValue.get();
+        e.swtRowStatus = swtRowStatus.get();
+        return e;
+    }
+
+private:
+    SwtRowEntryIndex index_;
+};
+
+/// @brief swtRowTable on the remote agent: table[index] gives a row, read() fetches the whole table.
+class SwtRowEntryRemoteTable {
+public:
+    explicit SwtRowEntryRemoteTable(Client& c) : c_(&c) {}
+    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.
+    SwtRowEntryRow operator[](const SwtRowEntryIndex& index) const { return SwtRowEntryRow(*c_, index); }
+    /// @brief Row access with a plain index number. @param[in] swtRowIndex Row index. @return The row.
+    SwtRowEntryRow operator[](std::int32_t swtRowIndex) const { return (*this)[SwtRowEntryIndex{swtRowIndex}]; }
+    /// @brief Reads the whole table (walk). @return All rows by index.
+    std::map<SwtRowEntryIndex, SwtRowEntry> read() const { return c_->swtRowTable(); }
+    /// @brief Creates a row in one request (columns + createAndGo, or createAndWait).
+    /// @param[in] index Row index. @param[in] values Column values. @param[in] activate True: createAndGo.
+    void create(const SwtRowEntryIndex& index, const SwtRowEntryValues& values, bool activate = true) const { c_->createSwtRowEntry(index, values, activate); }
+    /// @brief Destroys a row. @param[in] index Row index.
+    void destroy(const SwtRowEntryIndex& index) const { c_->destroySwtRowEntry(index); }
+
+private:
+    Client* c_;
+};
+
+/// @brief One row of swtConnTable on the remote agent: every cell has get() and, if writable, set().
+class SwtConnEntryRow {
+public:
+    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.
+    SwtConnEntryRow(Client& c, const SwtConnEntryIndex& index) : swtConnState(c, index), index_(index) {}
+
+    remote_detail::RwCell<SwtConnEntryIndex, &Client::swtConnState, &Client::setSwtConnState> swtConnState;  ///< swtConnState (read-write, Integer)
+
+    /// @brief The row index. @return The index this row is bound to.
+    const SwtConnEntryIndex& index() const { return index_; }
+    /// @brief Reads every column of the row (one GET per column). @return The row.
+    SwtConnEntry read() const {
+        SwtConnEntry e;
+        e.swtConnState = swtConnState.get();
+        return e;
+    }
+
+private:
+    SwtConnEntryIndex index_;
+};
+
+/// @brief swtConnTable on the remote agent: table[index] gives a row, read() fetches the whole table.
+class SwtConnEntryRemoteTable {
+public:
+    explicit SwtConnEntryRemoteTable(Client& c) : c_(&c) {}
+    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.
+    SwtConnEntryRow operator[](const SwtConnEntryIndex& index) const { return SwtConnEntryRow(*c_, index); }
+    /// @brief Reads the whole table (walk). @return All rows by index.
+    std::map<SwtConnEntryIndex, SwtConnEntry> read() const { return c_->swtConnTable(); }
+
+private:
+    Client* c_;
+};
+
+/// @brief One row of swtBigTable on the remote agent: every cell has get() and, if writable, set().
+class SwtBigEntryRow {
+public:
+    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.
+    SwtBigEntryRow(Client& c, const SwtBigEntryIndex& index) : swtBigValue(c, index), swtBigDouble(c, index), index_(index) {}
+
+    remote_detail::RoCell<SwtBigEntryIndex, &Client::swtBigValue> swtBigValue;  ///< swtBigValue (read-only, Gauge32)
+    remote_detail::RoCell<SwtBigEntryIndex, &Client::swtBigDouble> swtBigDouble;  ///< swtBigDouble (read-only, Gauge32)
+
+    /// @brief The row index. @return The index this row is bound to.
+    const SwtBigEntryIndex& index() const { return index_; }
+    /// @brief Reads every column of the row (one GET per column). @return The row.
+    SwtBigEntry read() const {
+        SwtBigEntry e;
+        e.swtBigValue = swtBigValue.get();
+        e.swtBigDouble = swtBigDouble.get();
+        return e;
+    }
+
+private:
+    SwtBigEntryIndex index_;
+};
+
+/// @brief swtBigTable on the remote agent: table[index] gives a row, read() fetches the whole table.
+class SwtBigEntryRemoteTable {
+public:
+    explicit SwtBigEntryRemoteTable(Client& c) : c_(&c) {}
+    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.
+    SwtBigEntryRow operator[](const SwtBigEntryIndex& index) const { return SwtBigEntryRow(*c_, index); }
+    /// @brief Row access with a plain index number. @param[in] swtBigIndex Row index. @return The row.
+    SwtBigEntryRow operator[](std::uint32_t swtBigIndex) const { return (*this)[SwtBigEntryIndex{swtBigIndex}]; }
+    /// @brief Reads the whole table (walk). @return All rows by index.
+    std::map<SwtBigEntryIndex, SwtBigEntry> read() const { return c_->swtBigTable(); }
+
+private:
+    Client* c_;
+};
+
+/**
+ * @brief SNMPWRAPPER-TEST-MIB on a remote agent, nested like Data: groups, scalars and table rows.
+ *
+ * Every scalar and cell has get() and, if writable, set(); set() checks the value against the MIB before
+ * anything is sent. Tables: remote.<table>[index] for one row, remote.<table>.read() for all rows.
+ * @code
+ * snmpwrap::Client session(config);
+ * snmpwrapper_test_mib::Remote remote(session);
+ * auto v = remote.<group>.<object>.get();
+ * remote.<group>.<table>[1].<column>.set(v);
+ * @endcode
+ * @note Not copyable; the session must outlive it. Like snmpwrap::Client: one per thread.
+ */
+class Remote {
+    Client flat_;  // first: every member below refers to it
+
+public:
+    /// @brief Wraps an open session. @param[in] session The session; must outlive this object.
+    explicit Remote(snmpwrap::Client& session) : flat_(session), swtScalars(flat_), swtTable(flat_), swtRowTable(flat_), swtConnTable(flat_), swtBigTable(flat_) {}
+    Remote(const Remote&) = delete;
+    Remote& operator=(const Remote&) = delete;
+
+    /// @brief Group swtScalars
+    struct SwtScalarsGroup {
+        explicit SwtScalarsGroup(Client& c) : swtName(c), swtCounter(c), swtGauge(c), swtLimit(c), swtUptime(c), swtBigCounter(c) {}
+        remote_detail::RwScalar<&Client::swtName, &Client::setSwtName> swtName;  ///< swtName (read-write, DisplayString SIZE(0..64)). A writable string.
+        remote_detail::RoScalar<&Client::swtCounter> swtCounter;  ///< swtCounter (read-only, Counter32). Increases by one every time it is read.
+        remote_detail::RoScalar<&Client::swtGauge> swtGauge;  ///< swtGauge (read-only, Gauge32). Seconds since the agent started, modulo 100.
+        remote_detail::RwScalar<&Client::swtLimit, &Client::setSwtLimit> swtLimit;  ///< swtLimit (read-write, Integer (1..100)). Writable integer; values outside 1..100 are rejected with wrongValue.
+        remote_detail::RoScalar<&Client::swtUptime> swtUptime;  ///< swtUptime (read-only, TimeTicks). Time since the agent started.
+        remote_detail::RoScalar<&Client::swtBigCounter> swtBigCounter;  ///< swtBigCounter (read-only, Counter64). Constant 4294967297 (needs 64 bit). Not available in SNMPv1.
+    } swtScalars;
+    SwtEntryRemoteTable swtTable;  ///< swtTable: A table of named values.
+    SwtRowEntryRemoteTable swtRowTable;  ///< swtRowTable: Rows are created with createAndGo / createAndWait; swtRowName is required.
+    SwtConnEntryRemoteTable swtConnTable;  ///< swtConnTable: Connections.
+    SwtBigEntryRemoteTable swtBigTable;  ///< swtBigTable: N rows; row i has index 2*i.
 };
 
 }  // namespace snmpwrapper_test_mib

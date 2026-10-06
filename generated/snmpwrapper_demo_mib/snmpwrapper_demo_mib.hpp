@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "snmpwrap/agent.hpp"
@@ -295,6 +296,126 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+};
+
+/// @brief Building blocks of Remote: accessors bound to one object (and row) of the remote agent.
+namespace remote_detail {
+
+/// @brief Read-only scalar.
+template <auto Get>
+class RoScalar {
+public:
+    explicit RoScalar(Client& c) : c_(&c) {}
+    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError
+    auto get() const { return (c_->*Get)(); }
+
+protected:
+    Client* c_;
+};
+
+/// @brief Writable scalar.
+template <auto Get, auto Set>
+class RwScalar : public RoScalar<Get> {
+public:
+    using RoScalar<Get>::RoScalar;
+    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.
+    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError
+    template <class V>
+    void set(V&& value) const { (this->c_->*Set)(std::forward<V>(value)); }
+};
+
+/// @brief Read-only table cell.
+template <class Index, auto Get>
+class RoCell {
+public:
+    RoCell(Client& c, const Index& index) : c_(&c), index_(index) {}
+    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError
+    auto get() const { return (c_->*Get)(index_); }
+
+protected:
+    Client* c_;
+    Index index_;
+};
+
+/// @brief Writable table cell.
+template <class Index, auto Get, auto Set>
+class RwCell : public RoCell<Index, Get> {
+public:
+    using RoCell<Index, Get>::RoCell;
+    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.
+    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError
+    template <class V>
+    void set(V&& value) const { (this->c_->*Set)(this->index_, std::forward<V>(value)); }
+};
+
+}  // namespace remote_detail
+
+/// @brief One row of sensorTable on the remote agent: every cell has get() and, if writable, set().
+class SensorEntryRow {
+public:
+    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.
+    SensorEntryRow(Client& c, const SensorEntryIndex& index) : sensorName(c, index), sensorValue(c, index), sensorEnabled(c, index), index_(index) {}
+
+    remote_detail::RoCell<SensorEntryIndex, &Client::sensorName> sensorName;  ///< sensorName (read-only, DisplayString SIZE(0..16))
+    remote_detail::RoCell<SensorEntryIndex, &Client::sensorValue> sensorValue;  ///< sensorValue (read-only, Integer (-50..150), UNITS "degrees Celsius")
+    remote_detail::RwCell<SensorEntryIndex, &Client::sensorEnabled, &Client::setSensorEnabled> sensorEnabled;  ///< sensorEnabled (read-write, TruthValue)
+
+    /// @brief The row index. @return The index this row is bound to.
+    const SensorEntryIndex& index() const { return index_; }
+    /// @brief Reads every column of the row (one GET per column). @return The row.
+    SensorEntry read() const {
+        SensorEntry e;
+        e.sensorName = sensorName.get();
+        e.sensorValue = sensorValue.get();
+        e.sensorEnabled = sensorEnabled.get();
+        return e;
+    }
+
+private:
+    SensorEntryIndex index_;
+};
+
+/// @brief sensorTable on the remote agent: table[index] gives a row, read() fetches the whole table.
+class SensorEntryRemoteTable {
+public:
+    explicit SensorEntryRemoteTable(Client& c) : c_(&c) {}
+    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.
+    SensorEntryRow operator[](const SensorEntryIndex& index) const { return SensorEntryRow(*c_, index); }
+    /// @brief Row access with a plain index number. @param[in] sensorIndex Row index. @return The row.
+    SensorEntryRow operator[](std::int32_t sensorIndex) const { return (*this)[SensorEntryIndex{sensorIndex}]; }
+    /// @brief Reads the whole table (walk). @return All rows by index.
+    std::map<SensorEntryIndex, SensorEntry> read() const { return c_->sensorTable(); }
+
+private:
+    Client* c_;
+};
+
+/**
+ * @brief SNMPWRAPPER-DEMO-MIB on a remote agent, nested like Data: groups, scalars and table rows.
+ *
+ * Every scalar and cell has get() and, if writable, set(); set() checks the value against the MIB before
+ * anything is sent. Tables: remote.<table>[index] for one row, remote.<table>.read() for all rows.
+ * @code
+ * snmpwrap::Client session(config);
+ * snmpwrapper_demo_mib::Remote remote(session);
+ * auto v = remote.<group>.<object>.get();
+ * remote.<group>.<table>[1].<column>.set(v);
+ * @endcode
+ * @note Not copyable; the session must outlive it. Like snmpwrap::Client: one per thread.
+ */
+class Remote {
+    Client flat_;  // first: every member below refers to it
+
+public:
+    /// @brief Wraps an open session. @param[in] session The session; must outlive this object.
+    explicit Remote(snmpwrap::Client& session) : flat_(session), deviceName(flat_), deviceUptime(flat_), alarmThreshold(flat_), sensorTable(flat_) {}
+    Remote(const Remote&) = delete;
+    Remote& operator=(const Remote&) = delete;
+
+    remote_detail::RwScalar<&Client::deviceName, &Client::setDeviceName> deviceName;  ///< deviceName (read-write, DisplayString SIZE(1..32)). Name of the device.
+    remote_detail::RoScalar<&Client::deviceUptime> deviceUptime;  ///< deviceUptime (read-only, TimeTicks). Time since the device started.
+    remote_detail::RwScalar<&Client::alarmThreshold, &Client::setAlarmThreshold> alarmThreshold;  ///< alarmThreshold (read-write, Integer (0..100), UNITS "degrees Celsius"). An enabled sensor above this temperature raises sensorAlarm.
+    SensorEntryRemoteTable sensorTable;  ///< sensorTable: The temperature sensors of the device.
 };
 
 }  // namespace snmpwrapper_demo_mib

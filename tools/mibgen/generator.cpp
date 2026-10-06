@@ -714,6 +714,169 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Remote (nested client view on top of the flat generated Client)
+// ---------------------------------------------------------------------------------------------
+
+void emitRemoteHelpers(W& w) {
+    w("/// @brief Building blocks of Remote: accessors bound to one object (and row) of the remote agent.");
+    w("namespace remote_detail {");
+    w();
+    w("/// @brief Read-only scalar.");
+    w("template <auto Get>");
+    w("class RoScalar {");
+    w("public:");
+    w("    explicit RoScalar(Client& c) : c_(&c) {}");
+    w("    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError");
+    w("    auto get() const { return (c_->*Get)(); }");
+    w();
+    w("protected:");
+    w("    Client* c_;");
+    w("};");
+    w();
+    w("/// @brief Writable scalar.");
+    w("template <auto Get, auto Set>");
+    w("class RwScalar : public RoScalar<Get> {");
+    w("public:");
+    w("    using RoScalar<Get>::RoScalar;");
+    w("    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.");
+    w("    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError");
+    w("    template <class V>");
+    w("    void set(V&& value) const { (this->c_->*Set)(std::forward<V>(value)); }");
+    w("};");
+    w();
+    w("/// @brief Read-only table cell.");
+    w("template <class Index, auto Get>");
+    w("class RoCell {");
+    w("public:");
+    w("    RoCell(Client& c, const Index& index) : c_(&c), index_(index) {}");
+    w("    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError");
+    w("    auto get() const { return (c_->*Get)(index_); }");
+    w();
+    w("protected:");
+    w("    Client* c_;");
+    w("    Index index_;");
+    w("};");
+    w();
+    w("/// @brief Writable table cell.");
+    w("template <class Index, auto Get, auto Set>");
+    w("class RwCell : public RoCell<Index, Get> {");
+    w("public:");
+    w("    using RoCell<Index, Get>::RoCell;");
+    w("    /// @brief SET; the value is checked against the MIB before it is sent. @param[in] value New value.");
+    w("    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError");
+    w("    template <class V>");
+    w("    void set(V&& value) const { (this->c_->*Set)(this->index_, std::forward<V>(value)); }");
+    w("};");
+    w();
+    w("}  // namespace remote_detail");
+    w();
+}
+
+std::string remoteScalarType(const MibNode& n) {
+    const std::string get = "&Client::" + ident(n.name);
+    return n.writable() ? "remote_detail::RwScalar<" + get + ", &Client::set" + upperFirst(n.name) + ">"
+                        : "remote_detail::RoScalar<" + get + ">";
+}
+
+std::string remoteCellType(const Table& t, const MibNode& c) {
+    const std::string get = "&Client::" + ident(c.name);
+    return c.writable() ? "remote_detail::RwCell<" + t.indexType + ", " + get + ", &Client::set" + upperFirst(c.name) + ">"
+                        : "remote_detail::RoCell<" + t.indexType + ", " + get + ">";
+}
+
+std::string remoteRowType(const Table& t) { return t.entryType + "Row"; }
+std::string remoteTableType(const Table& t) { return t.entryType + "RemoteTable"; }
+
+void emitRemoteTable(W& w, const Table& t) {
+    const std::string row = remoteRowType(t), ip = "const " + t.indexType + "& index";
+    // row proxy
+    std::string init;
+    for (const MibNode* c : t.columns) init += ident(c->name) + "(c, index), ";
+    if (t.rowStatus) init += ident(t.rowStatus->name) + "(c, index), ";
+    init += "index_(index)";
+    w("/// @brief One row of " + t.table->name + " on the remote agent: every cell has get() and, if writable, set().");
+    w("class " + row + " {");
+    w("public:");
+    w("    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.");
+    w("    " + row + "(Client& c, " + ip + ") : " + init + " {}");
+    w();
+    for (const MibNode* c : t.columns) w("    " + remoteCellType(t, *c) + " " + ident(c->name) + ";  ///< " + c->name + " (" + accessText(*c) + ")");
+    if (t.rowStatus)
+        w("    remote_detail::RwCell<" + t.indexType + ", &Client::" + ident(t.rowStatus->name) + ", &Client::set" + upperFirst(t.rowStatus->name) +
+          "> " + ident(t.rowStatus->name) + ";  ///< " + t.rowStatus->name + " (RowStatus)");
+    w();
+    w("    /// @brief The row index. @return The index this row is bound to.");
+    w("    const " + t.indexType + "& index() const { return index_; }");
+    w("    /// @brief Reads every column of the row (one GET per column). @return The row.");
+    w("    " + t.entryType + " read() const {");
+    w("        " + t.entryType + " e;");
+    for (const MibNode* c : t.columns) w("        e." + ident(c->name) + " = " + ident(c->name) + ".get();");
+    if (t.rowStatus) w("        e." + ident(t.rowStatus->name) + " = " + ident(t.rowStatus->name) + ".get();");
+    w("        return e;");
+    w("    }");
+    w();
+    w("private:");
+    w("    " + t.indexType + " index_;");
+    w("};");
+    w();
+    // table proxy
+    const std::string tt = remoteTableType(t);
+    w("/// @brief " + t.table->name + " on the remote agent: table[index] gives a row, read() fetches the whole table.");
+    w("class " + tt + " {");
+    w("public:");
+    w("    explicit " + tt + "(Client& c) : c_(&c) {}");
+    w("    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.");
+    w("    " + row + " operator[](" + ip + ") const { return " + row + "(*c_, index); }");
+    if (plainIntegerIndex(t)) {
+        const std::string ct = cppType(*t.index[0]), p = ident(t.index[0]->name);
+        w("    /// @brief Row access with a plain index number. @param[in] " + p + " Row index. @return The row.");
+        w("    " + row + " operator[](" + ct + " " + p + ") const { return (*this)[" + t.indexType + "{" + p + "}]; }");
+    }
+    w("    /// @brief Reads the whole table (walk). @return All rows by index.");
+    w("    std::map<" + t.indexType + ", " + t.entryType + "> read() const { return c_->" + ident(t.table->name) + "(); }");
+    if (t.rowStatus) {
+        w("    /// @brief Creates a row in one request (columns + createAndGo, or createAndWait).");
+        w("    /// @param[in] index Row index. @param[in] values Column values. @param[in] activate True: createAndGo.");
+        w("    void create(" + ip + ", const " + t.valuesType + "& values, bool activate = true) const { c_->" + t.createFn + "(index, values, activate); }");
+        w("    /// @brief Destroys a row. @param[in] index Row index.");
+        w("    void destroy(" + ip + ") const { c_->" + t.destroyFn + "(index); }");
+    }
+    w();
+    w("private:");
+    w("    Client* c_;");
+    w("};");
+    w();
+}
+
+/// Members and nested group structs of Remote; `init` collects the member initializers in declaration order.
+void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::string& pad, std::vector<std::string>& init) {
+    for (const Group& c : g.children) {
+        std::vector<std::string> sub;
+        W inner;
+        emitRemoteGroupBody(inner, mod, c, pad + "    ", sub);
+        std::string list;
+        for (std::size_t i = 0; i < sub.size(); ++i) list += (i ? ", " : "") + sub[i];
+        w(pad + "/// @brief Group " + c.mibName + (c.description.empty() ? "" : ": " + doc(c.description)));
+        w(pad + "struct " + c.type + " {");
+        w(pad + "    explicit " + c.type + "(Client& c) : " + list + " {}");
+        std::string body = inner.str();
+        if (!body.empty() && body.back() == '\n') body.pop_back();
+        w(body);
+        w(pad + "} " + c.member + ";");
+        init.push_back(c.member + "(c)");
+    }
+    for (const MibNode* n : g.scalars) {
+        w(pad + remoteScalarType(*n) + " " + memberName(n->name) + ";  ///< " + n->name + " (" + accessText(*n) + "). " + doc(n->description));
+        init.push_back(memberName(n->name) + "(c)");
+    }
+    for (std::size_t i : g.tables) {
+        const Table& t = mod.tables[i];
+        w(pad + remoteTableType(t) + " " + memberName(t.table->name) + ";  ///< " + t.table->name + ": " + doc(t.table->description));
+        init.push_back(memberName(t.table->name) + "(c)");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // header
 // ---------------------------------------------------------------------------------------------
 
@@ -731,6 +894,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w("#include <mutex>");
     w("#include <optional>");
     w("#include <string>");
+    w("#include <utility>");
     w("#include <vector>");
     w();
     w("#include \"snmpwrap/agent.hpp\"");
@@ -1048,6 +1212,41 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("private:");
         w("    struct Impl;");
         w("    std::unique_ptr<Impl> impl_;");
+        w("};");
+        w();
+
+        // --- Remote
+        emitRemoteHelpers(w);
+        for (const Table& t : mod.tables) emitRemoteTable(w, t);
+        W body;
+        std::vector<std::string> init;
+        emitRemoteGroupBody(body, mod, mod.data, "    ", init);
+        std::string list = "flat_(session)";
+        for (const std::string& i : init) list += ", " + i.substr(0, i.size() - 3) + "(flat_)";  // "(c)" -> "(flat_)"
+        w("/**");
+        w(" * @brief " + mod.name + " on a remote agent, nested like Data: groups, scalars and table rows.");
+        w(" *");
+        w(" * Every scalar and cell has get() and, if writable, set(); set() checks the value against the MIB before");
+        w(" * anything is sent. Tables: remote.<table>[index] for one row, remote.<table>.read() for all rows.");
+        w(" * @code");
+        w(" * snmpwrap::Client session(config);");
+        w(" * " + mod.ns + "::Remote remote(session);");
+        w(" * auto v = remote.<group>.<object>.get();");
+        w(" * remote.<group>.<table>[1].<column>.set(v);");
+        w(" * @endcode");
+        w(" * @note Not copyable; the session must outlive it. Like snmpwrap::Client: one per thread.");
+        w(" */");
+        w("class Remote {");
+        w("    Client flat_;  // first: every member below refers to it");
+        w();
+        w("public:");
+        w("    /// @brief Wraps an open session. @param[in] session The session; must outlive this object.");
+        w("    explicit Remote(snmpwrap::Client& session) : " + list + " {}");
+        w("    Remote(const Remote&) = delete;");
+        w("    Remote& operator=(const Remote&) = delete;");
+        w();
+        const std::string b = body.str();
+        w(b.substr(0, b.empty() ? 0 : b.size() - 1));
         w("};");
         w();
     }
