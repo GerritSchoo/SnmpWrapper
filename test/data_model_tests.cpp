@@ -1,12 +1,15 @@
 // Tests of the generated nested Data structure and its DataAgent adapter (NESTED-TEST-MIB).
 // No snmpd needed: the adapter is bound to a plain snmpwrap::Mib and driven like the agent does.
 
+#include <functional>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "nested_group_mib.hpp"  // generated from test/mibs/NESTED-GROUP-MIB.txt (types from NESTED-TYPES-MIB)
 #include "nested_test_mib.hpp"   // generated from test/mibs/NESTED-TEST-MIB.txt
+#include "snmpwrapper_test_mib.hpp"  // notifications
 
 namespace m = nested_test_mib;
 using namespace snmpwrap;
@@ -355,6 +358,88 @@ void testMessages() {
     CHECK((log == std::vector<std::string>{"value extendedPitchStatus@1.3.97.102.116", "attitude rows=2", "ownboat orca"}));
 }
 
+// --- the interfaces an application mocks in its own tests ---------------------------------------
+
+/// Hand-written mock of snmpwrap::Session: answers GETs from a map, records SETs.
+class MockSession : public Session {
+public:
+    std::map<Oid, Value> values;
+    std::vector<std::vector<VarBind>> sets;
+
+    std::vector<VarBind> get(const std::vector<Oid>& oids) override {
+        std::vector<VarBind> out;
+        for (const Oid& o : oids) out.push_back({o, values.count(o) ? values.at(o) : Value::exception(Type::NoSuchInstance)});
+        return out;
+    }
+    VarBind getNext(const Oid& oid) override {
+        auto it = values.upper_bound(oid);
+        return it == values.end() ? VarBind{oid, Value::exception(Type::EndOfMibView)} : VarBind{it->first, it->second};
+    }
+    std::vector<VarBind> getBulk(const std::vector<Oid>& oids, int, int) override { return get(oids); }
+    void set(const std::vector<VarBind>& varbinds) override {
+        sets.push_back(varbinds);
+        for (const auto& vb : varbinds) values[vb.oid] = vb.value;
+    }
+    void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) override {
+        for (auto it = values.upper_bound(root); it != values.end() && root.isPrefixOf(it->first); ++it)
+            if (!callback({it->first, it->second})) return;
+    }
+};
+
+struct MockSender : NotificationSender {
+    std::vector<std::pair<Oid, std::vector<VarBind>>> sent;
+    void sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars) override { sent.push_back({trapOid, vars}); }
+};
+
+struct MockSource : NotificationSource {
+    std::function<void(const Notification&)> handler;
+    void onNotification(std::function<void(const Notification&)> h) override { handler = std::move(h); }
+};
+
+void testMockableInterfaces() {
+    // Remote against a mocked session: OIDs, types and the MIB check come from the generated code
+    MockSession session;
+    session.values[scalar(m::oids::boatName)] = Value::string("mocked");
+    m::Remote remote(session);
+    CHECK(remote.boatName.get() == "mocked");
+    remote.navigation.navigationMode.set(m::NavigationMode::automatic);
+    CHECK(session.sets.size() == 1 && session.sets[0][0].oid == scalar(m::oids::navigationMode) && session.sets[0][0].value == Value::integer(2));
+    bool refused = false;
+    try {
+        remote.boatName.set(std::string(40, 'x'));  // SIZE (1..16): nothing reaches the session
+    } catch (const SetError&) {
+        refused = true;
+    }
+    CHECK(refused && session.sets.size() == 1);
+    remote.attitude.extendedRollTable[3].extendedRollValue.set(-12);
+    CHECK(session.sets.back()[0].oid == cell(m::oids::extendedRollValue, m::ExtendedRollEntryIndex{3}.toOid()));
+    const m::Data snapshot = remote.read();  // walk through the mock
+    CHECK(snapshot.boatName == "mocked" && snapshot.attitude.extendedRollTable.at(m::ExtendedRollEntryIndex{3}).extendedRollValue == -12);
+
+    // sending notifications through a mocked sender
+    namespace t = snmpwrapper_test_mib;
+    MockSender sender;
+    t::sendSwtAlarm(sender, "pump", 42);
+    CHECK(sender.sent.size() == 1 && sender.sent[0].first == t::oids::swtAlarm);
+    CHECK(sender.sent[0].second.size() == 2 && sender.sent[0].second[0].value == Value::string("pump") &&
+          sender.sent[0].second[1].value == Value::integer(42));
+
+    // receiving: a mocked source feeds the generated typed handlers
+    MockSource source;
+    t::Notifications notifications(source);
+    std::string name;
+    std::int32_t limit = 0;
+    notifications.onSwtAlarm([&](const t::SwtAlarm& a) {
+        name = a.swtName;
+        limit = a.swtLimit;
+    });
+    Notification n;
+    n.trapOid = t::oids::swtAlarm;
+    n.vars = sender.sent[0].second;  // what the agent sent
+    source.handler(n);
+    CHECK(name == "pump" && limit == 42);
+}
+
 void testLock() {
     Served s;
     {
@@ -378,6 +463,7 @@ int main() {
     testRowCompleteness();
     testImportedTypesAndSingleGroup();
     testMessages();
+    testMockableInterfaces();
     testLock();
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
     return g_failures == 0 ? 0 : 1;

@@ -29,6 +29,27 @@ struct Notification {
 };
 
 /**
+ * @brief Something that sends notifications - implemented by Agent; mock it in tests.
+ * The generated `send<Name>()` functions take a NotificationSender&.
+ */
+class NotificationSender {
+public:
+    virtual ~NotificationSender() = default;
+    /// @brief Sends a notification. @param[in] trapOid The NOTIFICATION-TYPE OID. @param[in] vars Its OBJECTS.
+    virtual void sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars) = 0;
+};
+
+/**
+ * @brief Something that delivers received notifications - implemented by NotificationReceiver; mock it in tests. The generated `Notifications` class takes a NotificationSource&.
+ */
+class NotificationSource {
+public:
+    virtual ~NotificationSource() = default;
+    /// @brief Adds a handler that gets every notification. @param[in] handler The handler.
+    virtual void onNotification(std::function<void(const Notification&)> handler) = 0;
+};
+
+/**
  * @brief Listens for SNMPv1 / SNMPv2c traps and informs on a UDP (or TCP) address.
  *
  * Point snmpd's trap destinations at it (`trap2sink`, `trapsink`, `informsink` in snmpd.conf).
@@ -42,7 +63,7 @@ struct Notification {
  *
  * @note Like Client: use it from one thread. With an Agent in the same process, create the Agent first.
  */
-class NotificationReceiver {
+class NotificationReceiver : public NotificationSource {
 public:
     /**
      * @brief Opens the listening socket.
@@ -56,7 +77,7 @@ public:
 
     /// @brief Adds a handler; all handlers get every notification. Exceptions from handlers are ignored.
     /// @param[in] handler The handler.
-    void onNotification(std::function<void(const Notification&)> handler);
+    void onNotification(std::function<void(const Notification&)> handler) override;
 
     /**
      * @brief Waits for and processes incoming messages.

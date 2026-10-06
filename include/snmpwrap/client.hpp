@@ -12,6 +12,7 @@
 
 #include "snmpwrap/error.hpp"
 #include "snmpwrap/oid.hpp"
+#include "snmpwrap/session.hpp"
 #include "snmpwrap/value.hpp"
 
 namespace snmpwrap {
@@ -93,7 +94,7 @@ struct SessionConfig {
  * @note Not thread-safe: use one Client per thread. When an Agent lives in the same process, create
  *       the Agent first (see Agent).
  */
-class Client {
+class Client : public Session {
 public:
     /**
      * @brief Opens the session (for SNMPv3 including engine discovery).
@@ -113,13 +114,9 @@ public:
     Client(const Client&) = delete;
     Client& operator=(const Client&) = delete;
 
-    /**
-     * @brief GET of one instance.
-     * @param[in] oid Instance OID, e.g. 1.3.6.1.2.1.1.1.0 (sysDescr.0).
-     * @return The varbind; for v2c/v3 the value may be an exception marker (NoSuchObject / NoSuchInstance).
-     * @throws TransportError, ResponseError
-     */
-    VarBind get(const Oid& oid);
+    using Session::get;   // get(const Oid&)
+    using Session::set;   // set(const Oid&, const Value&)
+    using Session::walk;  // walk(const Oid&) -> all varbinds
 
     /**
      * @brief GET of several instances in one request.
@@ -127,7 +124,7 @@ public:
      * @return One varbind per OID, in the same order.
      * @throws TransportError, ResponseError
      */
-    std::vector<VarBind> get(const std::vector<Oid>& oids);
+    std::vector<VarBind> get(const std::vector<Oid>& oids) override;
 
     /**
      * @brief GETNEXT: the first instance after @p oid.
@@ -135,7 +132,7 @@ public:
      * @return The next varbind; for v2c/v3 Type::EndOfMibView if nothing follows.
      * @throws TransportError, ResponseError (v1: NoSuchName at the end of the MIB)
      */
-    VarBind getNext(const Oid& oid);
+    VarBind getNext(const Oid& oid) override;
 
     /**
      * @brief GETBULK (SNMPv2c / v3 only).
@@ -145,15 +142,7 @@ public:
      * @return All returned varbinds (may end with EndOfMibView markers).
      * @throws Error on SNMPv1; TransportError, ResponseError.
      */
-    std::vector<VarBind> getBulk(const std::vector<Oid>& oids, int nonRepeaters = 0, int maxRepetitions = 10);
-
-    /**
-     * @brief SET of one instance.
-     * @param[in] oid   Instance OID.
-     * @param[in] value New value; its Type must match the object's type in the agent.
-     * @throws TransportError, ResponseError (e.g. NotWritable, WrongType, WrongValue).
-     */
-    void set(const Oid& oid, const Value& value);
+    std::vector<VarBind> getBulk(const std::vector<Oid>& oids, int nonRepeaters = 0, int maxRepetitions = 10) override;
 
     /**
      * @brief SET of several instances in ONE atomic request: either all are applied or none.
@@ -166,7 +155,7 @@ public:
      *        {tbl + Oid{1, 4, 7}, Value::integer(4)}});   // createAndGo
      * @endcode
      */
-    void set(const std::vector<VarBind>& varbinds);
+    void set(const std::vector<VarBind>& varbinds) override;
 
     /**
      * @brief Walks the subtree below @p root and calls @p callback for every instance.
@@ -175,15 +164,8 @@ public:
      * @throws TransportError, ResponseError; Error if the agent returns non-increasing OIDs.
      * @note Uses GETBULK on v2c / v3 and GETNEXT on v1.
      */
-    void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback);
+    void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) override;
 
-    /**
-     * @brief Walks the subtree below @p root and collects all instances.
-     * @param[in] root Subtree to walk.
-     * @return All varbinds in OID order.
-     * @throws as walk(const Oid&, const std::function<bool(const VarBind&)>&).
-     */
-    std::vector<VarBind> walk(const Oid& root);
 
 private:
     struct Impl;

@@ -24,7 +24,7 @@ if(SNMPWRAP_BUILD_MIBGEN)
         target_compile_options(nested_group_mib PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_executable(snmpwrap_data_model_tests data_model_tests.cpp)
-    target_link_libraries(snmpwrap_data_model_tests PRIVATE nested_test_mib nested_group_mib)
+    target_link_libraries(snmpwrap_data_model_tests PRIVATE nested_test_mib nested_group_mib snmpwrapper_test_mib)
     add_test(NAME data_model COMMAND snmpwrap_data_model_tests)
 endif()
 

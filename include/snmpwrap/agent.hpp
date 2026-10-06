@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "snmpwrap/mib.hpp"
+#include "snmpwrap/notification.hpp"
 
 namespace snmpwrap {
 
@@ -61,7 +62,7 @@ struct AgentConfig {
  *       (rocommunity / rwcommunity / createUser / rouser / rwuser). Counter64 values are invisible
  *       to SNMPv1 managers (snmpd skips / rejects them).
  */
-class Agent {
+class Agent : public NotificationSender {
 public:
     /**
      * @brief Initializes Net-SNMP as AgentX subagent (does not connect yet, see start()).
@@ -131,7 +132,7 @@ public:
      *       to its configured sinks (trapsink = v1, trap2sink / informsink = v2c, trapsess = v3).
      *       It is dropped if the master is not connected.
      */
-    void sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars = {});
+    void sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars = {}) override;
 
 private:
     struct Impl;

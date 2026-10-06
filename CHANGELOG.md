@@ -17,6 +17,9 @@ One way to use the library: the MIB describes the data, the build generates the 
   `Remote` sends a subtree, a row or the whole MIB as one request (`send()`), any values together with `change()`,
   and reads everything into a `Data` (`read()`).
 - `NotificationReceiver` (v1/v2c traps and informs) and generated typed handlers (`Notifications::on<Name>()`).
+- Interfaces with pure virtual functions for mocking in application tests: `Session` (implemented by `Client`),
+  `NotificationSender` (`Agent`), `NotificationSource` (`NotificationReceiver`); the generated `Remote`, `send<Name>()`
+  and `Notifications` take these interfaces.
 - `Mib::onRequestEnd()` – end of a SET request (committed or rolled back).
 - `Value::opaque()` / `Value::bits()` with their own types (`Type::Opaque`, `Type::Bits`).
 - SNMPv3 client: SHA-224/256/384/512 and AES-192/256 (when Net-SNMP supports them).

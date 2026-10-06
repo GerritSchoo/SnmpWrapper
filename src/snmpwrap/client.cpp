@@ -161,8 +161,6 @@ Client::~Client() = default;
 Client::Client(Client&&) noexcept = default;
 Client& Client::operator=(Client&&) noexcept = default;
 
-VarBind Client::get(const Oid& oid) { return get(std::vector<Oid>{oid}).front(); }
-
 std::vector<VarBind> Client::get(const std::vector<Oid>& oids) {
     std::vector<VarBind> in;
     for (const auto& o : oids) in.push_back({o, Value::null()});
@@ -177,8 +175,6 @@ std::vector<VarBind> Client::getBulk(const std::vector<Oid>& oids, int nonRepeat
     for (const auto& o : oids) in.push_back({o, Value::null()});
     return impl_->request(SNMP_MSG_GETBULK, in, nonRepeaters, maxRepetitions);
 }
-
-void Client::set(const Oid& oid, const Value& value) { set(std::vector<VarBind>{{oid, value}}); }
 
 void Client::set(const std::vector<VarBind>& varbinds) { impl_->request(SNMP_MSG_SET, varbinds); }
 
@@ -204,13 +200,5 @@ void Client::walk(const Oid& root, const std::function<bool(const VarBind&)>& ca
     }
 }
 
-std::vector<VarBind> Client::walk(const Oid& root) {
-    std::vector<VarBind> out;
-    walk(root, [&](const VarBind& vb) {
-        out.push_back(vb);
-        return true;
-    });
-    return out;
-}
 
 }  // namespace snmpwrap

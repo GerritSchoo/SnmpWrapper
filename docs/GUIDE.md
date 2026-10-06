@@ -454,6 +454,40 @@ Rules (Net-SNMP keeps process-wide state):
 
 ---
 
+### Testing your application: the interfaces to mock
+
+The network sits behind three small interfaces with pure virtual functions. Your code depends on them; your tests pass
+mocks (written by hand or with gmock). The generated code only uses these interfaces:
+
+| Interface (`snmpwrap::`) | Pure virtual functions | Real implementation | Used by |
+|---|---|---|---|
+| `Session` (`session.hpp`) | `get(oids)`, `getNext`, `getBulk`, `set(varbinds)`, `walk(root, callback)` | `Client` | `Remote` |
+| `NotificationSender` (`notification.hpp`) | `sendTrap(trapOid, vars)` | `Agent` | `send<Name>()` |
+| `NotificationSource` (`notification.hpp`) | `onNotification(handler)` | `NotificationReceiver` | `Notifications` |
+
+```cpp
+class MockSession : public snmpwrap::Session {          // e.g. with gmock
+public:
+    MOCK_METHOD(std::vector<snmpwrap::VarBind>, get, (const std::vector<snmpwrap::Oid>&), (override));
+    MOCK_METHOD(snmpwrap::VarBind, getNext, (const snmpwrap::Oid&), (override));
+    MOCK_METHOD(std::vector<snmpwrap::VarBind>, getBulk, (const std::vector<snmpwrap::Oid>&, int, int), (override));
+    MOCK_METHOD(void, set, (const std::vector<snmpwrap::VarBind>&), (override));
+    MOCK_METHOD(void, walk, (const snmpwrap::Oid&, const std::function<bool(const snmpwrap::VarBind&)>&), (override));
+};
+
+MockSession session;
+mib::Remote remote(session);                            // the real generated code, on top of the mock
+EXPECT_CALL(session, set(...));
+remote.appSensors.appLimit.set(40);                     // MIB check, OID and value come from the generated code
+```
+
+The agent side needs no interface: `Data` is a plain struct, and `DataAgent(snmpwrap::Mib&, Data&)` works without an
+`Agent` and without snmpd – drive it in a test through `mib.get()`, `mib.getNext()` and `mib.prepare()` (the same calls
+the agent makes), and your hooks run exactly as in production. [test/data_model_tests.cpp](../test/data_model_tests.cpp)
+does both.
+
+---
+
 ## 8. snmpd configuration and SNMP versions
 
 For the agent, SNMP versions are purely a matter of snmpd – your code is the same for all of them:
@@ -539,8 +573,9 @@ are only known at run time, or a proxy to another process. The reference is in t
 |---|---|
 | `snmpwrap/agent.hpp` | `Agent`, `AgentConfig` |
 | `snmpwrap/mib.hpp` | `Mib` (scalars, tables, RowStatus by OID), `Handler`, `SetTransaction` |
+| `snmpwrap/session.hpp` | `Session` – interface of a client session (for mocks) |
 | `snmpwrap/client.hpp` | `Client`, `SessionConfig` |
-| `snmpwrap/notification.hpp` | `NotificationReceiver`, `Notification` |
+| `snmpwrap/notification.hpp` | `NotificationReceiver`, `Notification`, interfaces `NotificationSender` / `NotificationSource` |
 | `snmpwrap/oid.hpp`, `value.hpp`, `index.hpp`, `error.hpp` | `Oid`, `Value`/`Type`/`VarBind`, index encoding, exceptions |
 | `snmpwrap/mib_model.hpp` | `MibModel` – reads MIB files (used by the generator and `client_cli -m`) |
 

@@ -445,14 +445,14 @@ std::string checkFn(const MibNode& n) { return "check_" + ident(n.name); }
 /// Parameters and varbinds of a send<Notification>() function. Columns of a table generated in this
 /// module share one typed index parameter per table; columns of foreign tables get a raw Oid index.
 struct NotificationSig {
-    std::string params;                    // "snmpwrap::Agent& agent, ..."
+    std::string params;                    // "snmpwrap::NotificationSender& agent, ..."
     std::vector<std::string> paramDocs;    // "@param[in] x ..." lines
     std::vector<std::string> varbinds;     // "{oid + suffix, value}" expressions
 };
 
 NotificationSig notificationSig(const MibModel& m, const Module& mod, const MibNode& n) {
     NotificationSig sig;
-    sig.params = "snmpwrap::Agent& agent";
+    sig.params = "snmpwrap::NotificationSender& agent";
     sig.paramDocs.push_back("agent The agent.");
     std::vector<std::pair<std::string, std::string>> indexParams;  // (declaration, doc) appended after the values
     std::set<std::string> seenIndex;
@@ -880,7 +880,7 @@ void emitRemoteHelpers(W& w) {
     w(" */");
     w("class Change {");
     w("public:");
-    w("    explicit Change(snmpwrap::Client& session) : s_(&session) {}");
+    w("    explicit Change(snmpwrap::Session& session) : s_(&session) {}");
     w("    /// @brief Adds a value. @param[in] target A writable scalar or cell of Remote. @param[in] value New value. @return *this.");
     w("    template <class Target, class V>");
     w("    Change& set(const Target& target, V&& value) {");
@@ -894,7 +894,7 @@ void emitRemoteHelpers(W& w) {
     w("    }");
     w();
     w("private:");
-    w("    snmpwrap::Client* s_;");
+    w("    snmpwrap::Session* s_;");
     w("    std::vector<snmpwrap::VarBind> vbs_;");
     w("};");
     w();
@@ -1305,9 +1305,9 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w("class Client {");
     w("public:");
     w("    /// @brief Wraps a session. @param[in] client Open session; must outlive this object.");
-    w("    explicit Client(snmpwrap::Client& client) : c_(client) {}");
+    w("    explicit Client(snmpwrap::Session& client) : c_(client) {}");
     w("    /// @brief The session underneath. @return The session passed to the constructor.");
-    w("    snmpwrap::Client& session() { return c_; }");
+    w("    snmpwrap::Session& session() { return c_; }");
     for (const MibNode* n : mod.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name);
         w();
@@ -1355,7 +1355,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     }
     w();
     w("private:");
-    w("    snmpwrap::Client& c_;");
+    w("    snmpwrap::Session& c_;");
     w("};");
     w();
 
@@ -1484,14 +1484,15 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w(" * auto v = remote.<group>.<object>.get();");
         w(" * remote.<group>.<table>[1].<column>.set(v);");
         w(" * @endcode");
-        w(" * @note Not copyable; the session must outlive it. Like snmpwrap::Client: one per thread.");
+        w(" * @note Not copyable; the session must outlive it. Like snmpwrap::Client: one per thread. In tests pass a");
+        w(" *       mock of snmpwrap::Session instead of a Client.");
         w(" */");
         w("class Remote {");
         w("    Client flat_;  // first: every member below refers to it");
         w();
         w("public:");
-        w("    /// @brief Wraps an open session. @param[in] session The session; must outlive this object.");
-        w("    explicit Remote(snmpwrap::Client& session) : " + list + " {}");
+        w("    /// @brief Wraps a session (snmpwrap::Client or a mock of snmpwrap::Session). @param[in] session Must outlive this object.");
+        w("    explicit Remote(snmpwrap::Session& session) : " + list + " {}");
         w("    Remote(const Remote&) = delete;");
         w("    Remote& operator=(const Remote&) = delete;");
         w();
@@ -1531,7 +1532,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("class Notifications {");
         w("public:");
         w("    /// @brief Registers at the receiver. @param[in] receiver The receiver.");
-        w("    explicit Notifications(snmpwrap::NotificationReceiver& receiver);");
+        w("    explicit Notifications(snmpwrap::NotificationSource& receiver);");
         w("    Notifications(const Notifications&) = delete;");
         w("    Notifications& operator=(const Notifications&) = delete;");
         for (const MibNode* n : mod.notifications) {
@@ -1906,7 +1907,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     }
     // received notifications
     if (!mod.notifications.empty()) {
-        w("Notifications::Notifications(snmpwrap::NotificationReceiver& receiver) {");
+        w("Notifications::Notifications(snmpwrap::NotificationSource& receiver) {");
         w("    receiver.onNotification([this](const snmpwrap::Notification& n) { dispatch(n); });");
         w("}");
         w();
