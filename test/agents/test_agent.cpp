@@ -1,4 +1,4 @@
-// Example AgentX subagent implementing SNMPWRAPPER-TEST-MIB (mibs/SNMPWRAPPER-TEST-MIB.txt)
+// Example AgentX subagent implementing SNMPWRAPPER-TEST-MIB (test/mibs/SNMPWRAPPER-TEST-MIB.txt)
 // with the generic snmpwrap API. Needs a running snmpd with "master agentx".
 //
 //   test_agent [--socket tcp:127.0.0.1:705] [--trap-every <seconds>] [--big-table <rows>]

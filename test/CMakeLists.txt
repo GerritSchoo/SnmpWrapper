@@ -8,10 +8,16 @@ target_compile_definitions(snmpwrap_mib_model_tests PRIVATE SNMPWRAP_SOURCE_DIR=
 add_test(NAME mib_model COMMAND snmpwrap_mib_model_tests)
 
 
-# Generated nested Data structure (groups, tables, DataAgent) for NESTED-TEST-MIB
+# Code generated from the test MIBs (generated code must compile without warnings)
 if(SNMPWRAP_BUILD_MIBGEN)
+    add_library(snmpwrapper_test_mib STATIC)
+    snmpwrap_add_mib(snmpwrapper_test_mib MODULE SNMPWRAPPER-TEST-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/mibs/SNMPWRAPPER-TEST-MIB.txt)
     add_library(nested_test_mib STATIC)
     snmpwrap_add_mib(nested_test_mib MODULE NESTED-TEST-MIB MIB ${CMAKE_CURRENT_SOURCE_DIR}/mibs/NESTED-TEST-MIB.txt)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(snmpwrapper_test_mib PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(nested_test_mib PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
     add_executable(snmpwrap_data_model_tests data_model_tests.cpp)
     target_link_libraries(snmpwrap_data_model_tests PRIVATE nested_test_mib)
     add_test(NAME data_model COMMAND snmpwrap_data_model_tests)
@@ -33,16 +39,9 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
 
         set(variants "integration:test_agent")
 
-        #   integration_generated - test/agents/generated_test_agent.cpp (code generated from the MIB at build time)
-        #                           + the generated typed client (generated_client_check)
-        if(TARGET snmpwrapper_test_mib)  # generated/snmpwrapper_test_mib
-            add_executable(generated_test_agent agents/generated_test_agent.cpp)
-            target_link_libraries(generated_test_agent PRIVATE snmpwrapper_test_mib)
-            add_executable(generated_client_check agents/generated_client_check.cpp)
-            target_link_libraries(generated_client_check PRIVATE snmpwrapper_test_mib)
-            list(APPEND variants "integration_generated:generated_test_agent")
-
-            #   integration_data - test/agents/data_test_agent.cpp (the same MIB served from the generated nested Data structure)
+        if(TARGET snmpwrapper_test_mib)
+            #   integration_data - test/agents/data_test_agent.cpp (the same MIB served from the generated Data structure)
+            #                      + the generated Remote client (remote_client_check)
             add_executable(data_test_agent agents/data_test_agent.cpp)
             target_link_libraries(data_test_agent PRIVATE snmpwrapper_test_mib)
             add_executable(remote_client_check agents/remote_client_check.cpp)
@@ -57,7 +56,7 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
             add_test(NAME ${test_name}
                 COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_integration.sh
                         $<TARGET_FILE:${agent_target}> $<TARGET_FILE:client_cli>
-                        ${NetSNMP_PREFIX} ${PROJECT_SOURCE_DIR}/mibs)
+                        ${NetSNMP_PREFIX} ${CMAKE_CURRENT_SOURCE_DIR}/mibs)
             # all variants use the same local ports
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 120 RESOURCE_LOCK snmpd_ports)
         endforeach()
@@ -68,8 +67,7 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
                         $<TARGET_FILE:agent_app> $<TARGET_FILE:client_app> ${NetSNMP_PREFIX})
             set_tests_properties(apps PROPERTIES TIMEOUT 60 RESOURCE_LOCK snmpd_ports)
         endif()
-        if(TARGET generated_client_check)
-            set_property(TEST integration_generated PROPERTY ENVIRONMENT "EXTRA_CHECK=$<TARGET_FILE:generated_client_check>")
+        if(TARGET remote_client_check)
             set_property(TEST integration_data PROPERTY ENVIRONMENT "EXTRA_CHECK=$<TARGET_FILE:remote_client_check>")
         endif()
     endif()

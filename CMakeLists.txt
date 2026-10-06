@@ -70,11 +70,6 @@ if(SNMPWRAP_BUILD_MIBGEN)
 endif()
 
 # --- examples / tests -----------------------------------------------------------------------
-# code generated from the example MIBs, written to generated/<name>/ (one library per MIB)
-if(SNMPWRAP_BUILD_MIBGEN AND (SNMPWRAP_BUILD_EXAMPLES OR SNMPWRAP_BUILD_TESTS))
-    add_subdirectory(generated)
-endif()
-
 if(SNMPWRAP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()

@@ -118,21 +118,6 @@ public:
     static MibModel load(const std::vector<std::string>& files, const std::vector<std::string>& mibDirs = {});
 
     /**
-     * @brief Loads MIB modules by module name from the search path.
-     * @param[in] modules Module names, e.g. {"IF-MIB"}.
-     * @param[in] mibDirs Additional directories to search.
-     * @return The model.
-     * @throws Error as load().
-     */
-    static MibModel loadModules(const std::vector<std::string>& modules, const std::vector<std::string>& mibDirs = {});
-
-    /// @brief The modules that were explicitly loaded. @return Module names in load order.
-    const std::vector<std::string>& modules() const noexcept;
-
-    /// @brief All nodes. @return All known nodes, sorted by OID.
-    const std::vector<MibNode>& nodes() const noexcept;
-
-    /**
      * @brief Looks up a node by name.
      * @param[in] name "descriptor" or "MODULE::descriptor".
      * @return The node, or nullptr if unknown.

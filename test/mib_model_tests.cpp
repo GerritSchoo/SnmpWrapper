@@ -32,13 +32,10 @@ int g_checks = 0;
         }                                                                                           \
     } while (0)
 
-const std::string kMibs = SNMPWRAP_SOURCE_DIR "/mibs";
 const std::string kTestMibs = SNMPWRAP_SOURCE_DIR "/test/mibs";
 const Oid kRoot = Oid::parse("1.3.6.1.4.1.99999");
 
 void testExampleMib(const MibModel& m) {
-    CHECK(m.modules().size() == 2 && m.modules()[0] == "SNMPWRAPPER-TEST-MIB");
-
     // scalars
     const MibNode& limit = m.node("swtLimit");
     CHECK(limit.oid == kRoot + Oid{1, 4});
@@ -219,7 +216,6 @@ void testBrokenMibs() {
         CHECK(std::string(e.what()).find("NO-SUCH-MODULE-MIB") != std::string::npos);
     }
     CHECK_THROWS(MibModel::load({kTestMibs + "/does-not-exist.txt"}), Error);
-    CHECK_THROWS(MibModel::loadModules({"NO-SUCH-MODULE-MIB"}), Error);
 }
 
 }  // namespace
@@ -227,16 +223,12 @@ void testBrokenMibs() {
 int main() {
     try {
         // the model-test MIB imports from SNMPWRAPPER-TEST-MIB, found through the extra MIB directory
-        MibModel m = MibModel::load({kMibs + "/SNMPWRAPPER-TEST-MIB.txt", kTestMibs + "/SNMPWRAPPER-MODEL-TEST-MIB.txt"},
-                                    {kMibs});
+        MibModel m = MibModel::load({kTestMibs + "/SNMPWRAPPER-TEST-MIB.txt", kTestMibs + "/SNMPWRAPPER-MODEL-TEST-MIB.txt"},
+                                    {kTestMibs});
         testExampleMib(m);
         testModelTestMib(m);
         testValidate(m);
         testResolveFormatParse(m);
-        // standard module by name
-        MibModel ifm = MibModel::loadModules({"IF-MIB"});
-        CHECK(ifm.node("ifDescr").oid == Oid::parse("1.3.6.1.2.1.2.2.1.2"));
-        CHECK(ifm.indexSpecs(ifm.node("ifTable"))[0].kind == IndexKind::Integer);
         testBrokenMibs();
     } catch (const std::exception& e) {
         std::cerr << "unexpected exception: " << e.what() << "\n";

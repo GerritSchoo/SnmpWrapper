@@ -298,32 +298,10 @@ MibModel MibModel::load(const std::vector<std::string>& files, const std::vector
     return model;
 }
 
-MibModel MibModel::loadModules(const std::vector<std::string>& moduleNames, const std::vector<std::string>& mibDirs) {
-    std::lock_guard<std::mutex> lock(g_loadMutex);
-    netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_SAVE_MIB_DESCRS, 1);
-    netsnmp_init_mib();
-
-    Capture cap;
-    {
-        LogCapture capture(cap);
-        for (const auto& dir : mibDirs)
-            if (add_mibdir(dir.c_str()) < 0) cap.errors.push_back("cannot read MIB directory " + dir);
-        for (const auto& m : moduleNames) netsnmp_read_module(m.c_str());
-    }
-    if (!cap.errors.empty()) throw Error("loading MIB failed:\n" + joinErrors(cap.errors));
-
-    MibModel model(collect(moduleNames));
-    for (const auto& m : moduleNames)
-        if (model.objects(m).empty()) throw Error("MIB module " + m + " was not found");
-    return model;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------------------------
 
-const std::vector<std::string>& MibModel::modules() const noexcept { return d_->modules; }
-const std::vector<MibNode>& MibModel::nodes() const noexcept { return d_->nodes; }
 
 const MibNode* MibModel::find(std::string_view name) const {
     const std::string key(name);

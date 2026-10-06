@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test: unprivileged snmpd (master agentx) + examples/test_agent + net-snmp tools + snmpwrap::Client.
+# End-to-end test: unprivileged snmpd (master agentx) + a test agent (test/agents) + net-snmp tools + snmpwrap::Client.
 # The same core checks run for SNMPv1, v2c and v3 (noAuthNoPriv, authNoPriv, authPriv).
 #
 #   run_integration.sh <test_agent> <client_cli> <net-snmp prefix> <mibs dir>
