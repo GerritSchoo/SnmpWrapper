@@ -207,7 +207,11 @@ Fehler: `TransportError` (Timeout, Netz, v3-Authentifizierung), `ResponseError` 
     RowStatus, Multi-Index, große Tabelle per GETBULK, Rollback mit echtem UNDO, v1- und v2c-Traps, v3-Fehlerfälle,
     `client_cli -m`. Die Suite läuft gegen **drei Implementierungen** derselben MIB – handgeschrieben, generiert
     (plus generierter Client) und Laufzeit-gebunden – und alle bestehen identisch.
-  * Generator: deterministische Ausgabe, Neugenerierung bei MIB-Änderung, `snmpwrap_add_mib` aus einem installierten
+  * **Verschachtelte Datenstruktur aus der MIB:** Der Generator erzeugt zusätzlich `struct Data` (Gruppen als verschachtelte
+  Structs, Skalare als Felder, Tabellen als Zeilencontainer `data.gruppe.tabelle[index].spalte`) und `DataAgent`, der sie per
+  SNMP bereitstellt – ohne handgeschriebene Methode pro Objekt. Änderungen von Managern melden `onSet` / `onGet`
+  (siehe Guide, Kapitel 20). Lokale Zuweisungen werden nicht automatisch geprüft, dafür gibt es `data.validate()`.
+* Generator: deterministische Ausgabe, Neugenerierung bei MIB-Änderung, `snmpwrap_add_mib` aus einem installierten
     Paket (`find_package`).
 * **v3 authPriv ist in dieser Umgebung nicht verifiziert:** Das lokal gebaute Net-SNMP (`--with-openssl=internal`,
   ohne OpenSSL-Header) beantwortet authPriv/AES auch mit seinen eigenen Tools nicht. Der Test erkennt das und meldet

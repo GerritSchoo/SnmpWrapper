@@ -21,6 +21,8 @@ What to look at in `<name>.hpp`:
 * `enum class …` – named numbers (`INTEGER { … }`, TruthValue, …),
 * `struct …Index` / `struct …Entry` / `struct …Values` – table index, row, values for row creation,
 * `class Instrumentation` – the interface an agent implements (one method per MIB object),
+* `struct Data` and `class DataAgent` – the same MIB as one nested C++ structure (groups, scalars, table rows) plus the
+  adapter that serves it, so an agent needs no per-object methods (see the guide, section 20),
 * `registerMib()`, `bind()`, `send…()` – registration and notifications,
 * `class Client` – typed client access.
 

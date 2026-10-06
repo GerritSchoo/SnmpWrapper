@@ -2,6 +2,7 @@
 // DO NOT EDIT - changes are lost when the MIB is regenerated.
 #include "snmpwrapper_demo_mib.hpp"
 
+#include <set>
 #include <utility>
 
 namespace snmpwrapper_demo_mib {
@@ -37,7 +38,7 @@ const std::vector<snmpwrap::IndexSpec>& spec_SensorEntryIndex() {
 }
 
 /// MIB check of deviceName: read-write, DisplayString SIZE(1..32)
-void check_deviceName(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_deviceName(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::OctetString)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "deviceName: expected OctetString");
     const std::int64_t x = static_cast<std::int64_t>(v.asString().size());
@@ -45,8 +46,14 @@ void check_deviceName(const snmpwrap::Value& v) {
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongLength, "deviceName: length must be in 1..32");
 }
 
+/// MIB check of deviceUptime: read-only, TimeTicks
+[[maybe_unused]] void check_deviceUptime(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::TimeTicks)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "deviceUptime: expected TimeTicks");
+}
+
 /// MIB check of alarmThreshold: read-write, Integer (0..100), UNITS "degrees Celsius"
-void check_alarmThreshold(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_alarmThreshold(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Integer)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "alarmThreshold: expected Integer");
     const std::int64_t x = static_cast<std::int64_t>(v.asInt());
@@ -54,8 +61,26 @@ void check_alarmThreshold(const snmpwrap::Value& v) {
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "alarmThreshold: value must be in 0..100");
 }
 
+/// MIB check of sensorName: read-only, DisplayString SIZE(0..16)
+[[maybe_unused]] void check_sensorName(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::OctetString)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "sensorName: expected OctetString");
+    const std::int64_t x = static_cast<std::int64_t>(v.asString().size());
+    if (!((x >= 0LL && x <= 16LL)))
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongLength, "sensorName: length must be in 0..16");
+}
+
+/// MIB check of sensorValue: read-only, Integer (-50..150), UNITS "degrees Celsius"
+[[maybe_unused]] void check_sensorValue(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Integer)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "sensorValue: expected Integer");
+    const std::int64_t x = static_cast<std::int64_t>(v.asInt());
+    if (!((x >= -50LL && x <= 150LL)))
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "sensorValue: value must be in -50..150");
+}
+
 /// MIB check of sensorEnabled: read-write, TruthValue
-void check_sensorEnabled(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_sensorEnabled(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Integer)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "sensorEnabled: expected Integer");
     switch (v.asInt()) {
@@ -265,6 +290,151 @@ void Client::setSensorEnabled(const SensorEntryIndex& index, TruthValue value) {
     const snmpwrap::Value v = snmpwrap::Value::integer(static_cast<std::int32_t>(value));
     check_sensorEnabled(v);
     c_.set(oids::sensorEnabled + index.toOid(), v);
+}
+
+std::vector<std::string> Data::validate() const {
+    std::vector<std::string> bad;
+    auto check = [&bad](const std::string& where, const std::string& object, const auto& fn) {
+        try {
+            fn();
+        } catch (const snmpwrap::SetError& e) {
+            std::string text = e.what();  // "<object>: <reason>" - the object is named in `where`
+            if (text.rfind(object + ": ", 0) == 0) text.erase(0, object.size() + 2);
+            bad.push_back(where + ": " + text);
+        }
+    };
+    check("deviceName", "deviceName", [&] { check_deviceName(snmpwrap::Value::string(deviceName)); });
+    check("deviceUptime", "deviceUptime", [&] { check_deviceUptime(snmpwrap::Value::timeTicks(deviceUptime)); });
+    check("alarmThreshold", "alarmThreshold", [&] { check_alarmThreshold(snmpwrap::Value::integer(alarmThreshold)); });
+    for (const auto& kv : sensorTable) {
+        const std::string at = "sensorTable[" + kv.first.toOid().str() + "].";
+        check(at + "sensorName", "sensorName", [&] { check_sensorName(snmpwrap::Value::string(kv.second.sensorName)); });
+        check(at + "sensorValue", "sensorValue", [&] { check_sensorValue(snmpwrap::Value::integer(kv.second.sensorValue)); });
+        check(at + "sensorEnabled", "sensorEnabled", [&] { check_sensorEnabled(snmpwrap::Value::integer(static_cast<std::int32_t>(kv.second.sensorEnabled))); });
+    }
+    return bad;
+}
+
+struct DataAgent::Impl final : Instrumentation {
+    explicit Impl(Data& data) : d(data) {}
+    Data& d;
+    std::mutex mu;
+    SetHook hook;
+    GetHook getHook;
+    void changed(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {
+        if (hook) hook(object, index);
+    }
+    void reading(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {
+        if (getHook) getHook(object, index);
+    }
+
+    std::string deviceName() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("deviceName");
+        return d.deviceName;
+    }
+    void setDeviceName(const std::string& value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.deviceName;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("deviceName");
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::uint32_t deviceUptime() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("deviceUptime");
+        return d.deviceUptime;
+    }
+    std::int32_t alarmThreshold() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("alarmThreshold");
+        return d.alarmThreshold;
+    }
+    void setAlarmThreshold(std::int32_t value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.alarmThreshold;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("alarmThreshold");
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::vector<SensorEntryIndex> sensorTableRows() override {
+        std::lock_guard<std::mutex> l(mu);
+        std::vector<SensorEntryIndex> r;
+        for (const auto& kv : d.sensorTable) r.push_back(kv.first);
+        return r;
+    }
+    std::optional<SensorEntryIndex> sensorTableNext(const snmpwrap::Oid* after) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& rows = d.sensorTable;  // ordered like the OIDs of the indexes
+        if (!after) return rows.empty() ? std::nullopt : std::optional<SensorEntryIndex>(rows.begin()->first);
+        if (const auto idx = SensorEntryIndex::fromOid(*after)) {
+            const auto it = rows.upper_bound(*idx);
+            return it == rows.end() ? std::nullopt : std::optional<SensorEntryIndex>(it->first);
+        }
+        for (const auto& kv : rows)  // not a complete index: scan
+            if (kv.first.toOid() > *after) return kv.first;
+        return std::nullopt;
+    }
+    bool sensorTableHas(const SensorEntryIndex& index) override { std::lock_guard<std::mutex> l(mu); return d.sensorTable.count(index) != 0; }
+    std::string sensorName(const SensorEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("sensorName", index.toOid());
+        return d.sensorTable.at(index).sensorName;
+    }
+    std::int32_t sensorValue(const SensorEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("sensorValue", index.toOid());
+        return d.sensorTable.at(index).sensorValue;
+    }
+    TruthValue sensorEnabled(const SensorEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("sensorEnabled", index.toOid());
+        return d.sensorTable.at(index).sensorEnabled;
+    }
+    void setSensorEnabled(const SensorEntryIndex& index, TruthValue value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.sensorTable.at(index).sensorEnabled;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("sensorEnabled", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+};
+
+DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {
+    registerMib(agent, *impl_);
+}
+
+DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_unique<Impl>(data)) {
+    bind(mib, *impl_);
+}
+
+DataAgent::~DataAgent() = default;
+
+std::unique_lock<std::mutex> DataAgent::lock() { return std::unique_lock<std::mutex>(impl_->mu); }
+
+void DataAgent::onSet(SetHook hook) {
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->hook = std::move(hook);
+}
+
+void DataAgent::onGet(GetHook hook) {
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->getHook = std::move(hook);
 }
 
 }  // namespace snmpwrapper_demo_mib

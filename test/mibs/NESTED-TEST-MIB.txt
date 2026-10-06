@@ -1,0 +1,183 @@
+NESTED-TEST-MIB DEFINITIONS ::= BEGIN
+
+-- Test MIB for the generated nested Data structure: groups, a scalar next to a group, tables with a
+-- plain and a composite index, a RowStatus table, ranges, SIZE limits and named numbers.
+-- enterprises.99999 is a PLACEHOLDER enterprise number.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Counter32, TimeTicks, enterprises
+        FROM SNMPv2-SMI
+    DisplayString, RowStatus
+        FROM SNMPv2-TC;
+
+ownboat MODULE-IDENTITY
+    LAST-UPDATED "202610060000Z"
+    ORGANIZATION "snmpwrap test"
+    CONTACT-INFO "none"
+    DESCRIPTION  "A boat with attitude and navigation data."
+    REVISION     "202610060000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 300 }
+
+boatName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (1..16))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Name of the boat."
+    ::= { ownboat 1 }
+
+attitude OBJECT IDENTIFIER ::= { ownboat 2 }
+
+extendedRollTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF ExtendedRollEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Roll angle per sensor."
+    ::= { attitude 1 }
+
+extendedRollEntry OBJECT-TYPE
+    SYNTAX      ExtendedRollEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One roll sensor."
+    INDEX       { extendedRollIndex }
+    ::= { extendedRollTable 1 }
+
+ExtendedRollEntry ::= SEQUENCE {
+    extendedRollIndex     Integer32,
+    extendedRollValue     Integer32,
+    extendedRollSensor    DisplayString,
+    extendedRollCounter   Counter32,
+    extendedRollTimepoint TimeTicks
+}
+
+extendedRollIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..64)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Sensor number."
+    ::= { extendedRollEntry 1 }
+
+extendedRollValue OBJECT-TYPE
+    SYNTAX      Integer32 (-1800..1800)
+    UNITS       "tenths of a degree"
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Roll angle."
+    ::= { extendedRollEntry 2 }
+
+extendedRollSensor OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..16))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Name of the sensor."
+    ::= { extendedRollEntry 3 }
+
+extendedRollCounter OBJECT-TYPE
+    SYNTAX      Counter32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Number of measurements."
+    ::= { extendedRollEntry 4 }
+
+extendedRollTimepoint OBJECT-TYPE
+    SYNTAX      TimeTicks
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Time of the last measurement."
+    ::= { extendedRollEntry 5 }
+
+extendedPitchTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF ExtendedPitchEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Pitch angle per source and channel; rows are created and deleted by managers."
+    ::= { attitude 2 }
+
+extendedPitchEntry OBJECT-TYPE
+    SYNTAX      ExtendedPitchEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One pitch channel."
+    INDEX       { extendedPitchSource, extendedPitchChannel }
+    ::= { extendedPitchTable 1 }
+
+ExtendedPitchEntry ::= SEQUENCE {
+    extendedPitchSource  Integer32,
+    extendedPitchChannel DisplayString,
+    extendedPitchValue   Integer32,
+    extendedPitchStatus  RowStatus
+}
+
+extendedPitchSource OBJECT-TYPE
+    SYNTAX      Integer32 (1..8)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Source number."
+    ::= { extendedPitchEntry 1 }
+
+extendedPitchChannel OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (1..8))
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Channel name."
+    ::= { extendedPitchEntry 2 }
+
+extendedPitchValue OBJECT-TYPE
+    SYNTAX      Integer32 (-900..900)
+    MAX-ACCESS  read-create
+    STATUS      current
+    DESCRIPTION "Pitch angle."
+    ::= { extendedPitchEntry 3 }
+
+extendedPitchStatus OBJECT-TYPE
+    SYNTAX      RowStatus
+    MAX-ACCESS  read-create
+    STATUS      current
+    DESCRIPTION "Row status."
+    ::= { extendedPitchEntry 4 }
+
+navigation OBJECT IDENTIFIER ::= { ownboat 3 }
+
+navigationMode OBJECT-TYPE
+    SYNTAX      INTEGER { manual(1), automatic(2) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Steering mode."
+    ::= { navigation 1 }
+
+extendedCourseTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF ExtendedCourseEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Course over ground."
+    ::= { navigation 2 }
+
+extendedCourseEntry OBJECT-TYPE
+    SYNTAX      ExtendedCourseEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "One course source."
+    INDEX       { extendedCourseIndex }
+    ::= { extendedCourseTable 1 }
+
+ExtendedCourseEntry ::= SEQUENCE {
+    extendedCourseIndex Integer32,
+    extendedCourseValue Integer32
+}
+
+extendedCourseIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..4)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Source number."
+    ::= { extendedCourseEntry 1 }
+
+extendedCourseValue OBJECT-TYPE
+    SYNTAX      Integer32 (0..3599)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Course in tenths of a degree."
+    ::= { extendedCourseEntry 2 }
+
+END

@@ -2,6 +2,7 @@
 // DO NOT EDIT - changes are lost when the MIB is regenerated.
 #include "snmpwrapper_test_mib.hpp"
 
+#include <set>
 #include <utility>
 
 namespace snmpwrapper_test_mib {
@@ -52,7 +53,7 @@ const std::vector<snmpwrap::IndexSpec>& spec_SwtBigEntryIndex() {
 }
 
 /// MIB check of swtName: read-write, DisplayString SIZE(0..64)
-void check_swtName(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtName(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::OctetString)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtName: expected OctetString");
     const std::int64_t x = static_cast<std::int64_t>(v.asString().size());
@@ -60,8 +61,20 @@ void check_swtName(const snmpwrap::Value& v) {
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongLength, "swtName: length must be in 0..64");
 }
 
+/// MIB check of swtCounter: read-only, Counter32
+[[maybe_unused]] void check_swtCounter(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Counter32)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtCounter: expected Counter32");
+}
+
+/// MIB check of swtGauge: read-only, Gauge32
+[[maybe_unused]] void check_swtGauge(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Gauge32)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtGauge: expected Gauge32");
+}
+
 /// MIB check of swtLimit: read-write, Integer (1..100)
-void check_swtLimit(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtLimit(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Integer)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtLimit: expected Integer");
     const std::int64_t x = static_cast<std::int64_t>(v.asInt());
@@ -69,8 +82,20 @@ void check_swtLimit(const snmpwrap::Value& v) {
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "swtLimit: value must be in 1..100");
 }
 
+/// MIB check of swtUptime: read-only, TimeTicks
+[[maybe_unused]] void check_swtUptime(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::TimeTicks)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtUptime: expected TimeTicks");
+}
+
+/// MIB check of swtBigCounter: read-only, Counter64
+[[maybe_unused]] void check_swtBigCounter(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Counter64)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtBigCounter: expected Counter64");
+}
+
 /// MIB check of swtEntryName: read-write, DisplayString SIZE(0..32)
-void check_swtEntryName(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtEntryName(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::OctetString)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtEntryName: expected OctetString");
     const std::int64_t x = static_cast<std::int64_t>(v.asString().size());
@@ -79,13 +104,13 @@ void check_swtEntryName(const snmpwrap::Value& v) {
 }
 
 /// MIB check of swtEntryValue: read-write, Gauge32
-void check_swtEntryValue(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtEntryValue(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Gauge32)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtEntryValue: expected Gauge32");
 }
 
 /// MIB check of swtEntryStatus: read-write, Integer
-void check_swtEntryStatus(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtEntryStatus(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Integer)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtEntryStatus: expected Integer");
     switch (v.asInt()) {
@@ -95,7 +120,7 @@ void check_swtEntryStatus(const snmpwrap::Value& v) {
 }
 
 /// MIB check of swtRowName: read-create, DisplayString SIZE(0..32)
-void check_swtRowName(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtRowName(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::OctetString)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtRowName: expected OctetString");
     const std::int64_t x = static_cast<std::int64_t>(v.asString().size());
@@ -104,7 +129,7 @@ void check_swtRowName(const snmpwrap::Value& v) {
 }
 
 /// MIB check of swtRowValue: read-create, Gauge32 (0..1000)
-void check_swtRowValue(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtRowValue(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Gauge32)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtRowValue: expected Gauge32");
     const std::int64_t x = static_cast<std::int64_t>(v.asUInt());
@@ -113,13 +138,25 @@ void check_swtRowValue(const snmpwrap::Value& v) {
 }
 
 /// MIB check of swtConnState: read-write, Integer
-void check_swtConnState(const snmpwrap::Value& v) {
+[[maybe_unused]] void check_swtConnState(const snmpwrap::Value& v) {
     if (v.type() != snmpwrap::Type::Integer)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtConnState: expected Integer");
     switch (v.asInt()) {
         case 1: case 2: case 3: break;
         default: throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "swtConnState: not a defined value");
     }
+}
+
+/// MIB check of swtBigValue: read-only, Gauge32
+[[maybe_unused]] void check_swtBigValue(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Gauge32)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtBigValue: expected Gauge32");
+}
+
+/// MIB check of swtBigDouble: read-only, Gauge32
+[[maybe_unused]] void check_swtBigDouble(const snmpwrap::Value& v) {
+    if (v.type() != snmpwrap::Type::Gauge32)
+        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, "swtBigDouble: expected Gauge32");
 }
 
 }  // namespace
@@ -761,6 +798,377 @@ std::uint32_t Client::swtBigValue(const SwtBigEntryIndex& index) {
 std::uint32_t Client::swtBigDouble(const SwtBigEntryIndex& index) {
     const snmpwrap::VarBind vb = c_.get(oids::swtBigDouble + index.toOid());
     return expect(vb, snmpwrap::Type::Gauge32, "swtBigDouble").asUInt();
+}
+
+std::vector<std::string> Data::validate() const {
+    std::vector<std::string> bad;
+    auto check = [&bad](const std::string& where, const std::string& object, const auto& fn) {
+        try {
+            fn();
+        } catch (const snmpwrap::SetError& e) {
+            std::string text = e.what();  // "<object>: <reason>" - the object is named in `where`
+            if (text.rfind(object + ": ", 0) == 0) text.erase(0, object.size() + 2);
+            bad.push_back(where + ": " + text);
+        }
+    };
+    for (const auto& kv : swtTable) {
+        const std::string at = "swtTable[" + kv.first.toOid().str() + "].";
+        check(at + "swtEntryName", "swtEntryName", [&] { check_swtEntryName(snmpwrap::Value::string(kv.second.swtEntryName)); });
+        check(at + "swtEntryValue", "swtEntryValue", [&] { check_swtEntryValue(snmpwrap::Value::gauge(kv.second.swtEntryValue)); });
+        check(at + "swtEntryStatus", "swtEntryStatus", [&] { check_swtEntryStatus(snmpwrap::Value::integer(static_cast<std::int32_t>(kv.second.swtEntryStatus))); });
+    }
+    for (const auto& kv : swtRowTable) {
+        const std::string at = "swtRowTable[" + kv.first.toOid().str() + "].";
+        check(at + "swtRowName", "swtRowName", [&] { check_swtRowName(snmpwrap::Value::string(kv.second.swtRowName)); });
+        check(at + "swtRowValue", "swtRowValue", [&] { check_swtRowValue(snmpwrap::Value::gauge(kv.second.swtRowValue)); });
+    }
+    for (const auto& kv : swtConnTable) {
+        const std::string at = "swtConnTable[" + kv.first.toOid().str() + "].";
+        check(at + "swtConnState", "swtConnState", [&] { check_swtConnState(snmpwrap::Value::integer(static_cast<std::int32_t>(kv.second.swtConnState))); });
+    }
+    for (const auto& kv : swtBigTable) {
+        const std::string at = "swtBigTable[" + kv.first.toOid().str() + "].";
+        check(at + "swtBigValue", "swtBigValue", [&] { check_swtBigValue(snmpwrap::Value::gauge(kv.second.swtBigValue)); });
+        check(at + "swtBigDouble", "swtBigDouble", [&] { check_swtBigDouble(snmpwrap::Value::gauge(kv.second.swtBigDouble)); });
+    }
+    check("swtScalars.swtName", "swtName", [&] { check_swtName(snmpwrap::Value::string(swtScalars.swtName)); });
+    check("swtScalars.swtCounter", "swtCounter", [&] { check_swtCounter(snmpwrap::Value::counter32(swtScalars.swtCounter)); });
+    check("swtScalars.swtGauge", "swtGauge", [&] { check_swtGauge(snmpwrap::Value::gauge(swtScalars.swtGauge)); });
+    check("swtScalars.swtLimit", "swtLimit", [&] { check_swtLimit(snmpwrap::Value::integer(swtScalars.swtLimit)); });
+    check("swtScalars.swtUptime", "swtUptime", [&] { check_swtUptime(snmpwrap::Value::timeTicks(swtScalars.swtUptime)); });
+    check("swtScalars.swtBigCounter", "swtBigCounter", [&] { check_swtBigCounter(snmpwrap::Value::counter64(swtScalars.swtBigCounter)); });
+    return bad;
+}
+
+struct DataAgent::Impl final : Instrumentation {
+    explicit Impl(Data& data) : d(data) {}
+    Data& d;
+    std::mutex mu;
+    SetHook hook;
+    GetHook getHook;
+    void changed(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {
+        if (hook) hook(object, index);
+    }
+    void reading(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {
+        if (getHook) getHook(object, index);
+    }
+
+    std::vector<SwtEntryIndex> swtTableRows() override {
+        std::lock_guard<std::mutex> l(mu);
+        std::vector<SwtEntryIndex> r;
+        for (const auto& kv : d.swtTable) r.push_back(kv.first);
+        return r;
+    }
+    std::optional<SwtEntryIndex> swtTableNext(const snmpwrap::Oid* after) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& rows = d.swtTable;  // ordered like the OIDs of the indexes
+        if (!after) return rows.empty() ? std::nullopt : std::optional<SwtEntryIndex>(rows.begin()->first);
+        if (const auto idx = SwtEntryIndex::fromOid(*after)) {
+            const auto it = rows.upper_bound(*idx);
+            return it == rows.end() ? std::nullopt : std::optional<SwtEntryIndex>(it->first);
+        }
+        for (const auto& kv : rows)  // not a complete index: scan
+            if (kv.first.toOid() > *after) return kv.first;
+        return std::nullopt;
+    }
+    bool swtTableHas(const SwtEntryIndex& index) override { std::lock_guard<std::mutex> l(mu); return d.swtTable.count(index) != 0; }
+    std::string swtEntryName(const SwtEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtEntryName", index.toOid());
+        return d.swtTable.at(index).swtEntryName;
+    }
+    void setSwtEntryName(const SwtEntryIndex& index, const std::string& value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtTable.at(index).swtEntryName;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtEntryName", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::uint32_t swtEntryValue(const SwtEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtEntryValue", index.toOid());
+        return d.swtTable.at(index).swtEntryValue;
+    }
+    void setSwtEntryValue(const SwtEntryIndex& index, std::uint32_t value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtTable.at(index).swtEntryValue;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtEntryValue", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    SwtEntryStatus swtEntryStatus(const SwtEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtEntryStatus", index.toOid());
+        return d.swtTable.at(index).swtEntryStatus;
+    }
+    void setSwtEntryStatus(const SwtEntryIndex& index, SwtEntryStatus value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtTable.at(index).swtEntryStatus;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtEntryStatus", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::vector<SwtRowEntryIndex> swtRowTableRows() override {
+        std::lock_guard<std::mutex> l(mu);
+        std::vector<SwtRowEntryIndex> r;
+        for (const auto& kv : d.swtRowTable) r.push_back(kv.first);
+        return r;
+    }
+    std::optional<SwtRowEntryIndex> swtRowTableNext(const snmpwrap::Oid* after) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& rows = d.swtRowTable;  // ordered like the OIDs of the indexes
+        if (!after) return rows.empty() ? std::nullopt : std::optional<SwtRowEntryIndex>(rows.begin()->first);
+        if (const auto idx = SwtRowEntryIndex::fromOid(*after)) {
+            const auto it = rows.upper_bound(*idx);
+            return it == rows.end() ? std::nullopt : std::optional<SwtRowEntryIndex>(it->first);
+        }
+        for (const auto& kv : rows)  // not a complete index: scan
+            if (kv.first.toOid() > *after) return kv.first;
+        return std::nullopt;
+    }
+    bool swtRowTableHas(const SwtRowEntryIndex& index) override { std::lock_guard<std::mutex> l(mu); return d.swtRowTable.count(index) != 0; }
+    // columns supplied for rows created by a manager (rows added by the application count as complete)
+    std::map<SwtRowEntryIndex, std::set<std::string>> filled_swtRowTable;
+    std::string swtRowName(const SwtRowEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtRowName", index.toOid());
+        return d.swtRowTable.at(index).swtRowName;
+    }
+    void setSwtRowName(const SwtRowEntryIndex& index, const std::string& value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtRowTable.at(index).swtRowName;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtRowName", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+        if (const auto it = filled_swtRowTable.find(index); it != filled_swtRowTable.end()) it->second.insert("swtRowName");
+    }
+    std::uint32_t swtRowValue(const SwtRowEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtRowValue", index.toOid());
+        return d.swtRowTable.at(index).swtRowValue;
+    }
+    void setSwtRowValue(const SwtRowEntryIndex& index, std::uint32_t value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtRowTable.at(index).swtRowValue;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtRowValue", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+        if (const auto it = filled_swtRowTable.find(index); it != filled_swtRowTable.end()) it->second.insert("swtRowValue");
+    }
+    void createSwtRowEntry(const SwtRowEntryIndex& index, const SwtRowEntryValues& values) override {
+        std::lock_guard<std::mutex> l(mu);
+        SwtRowEntry& row = d.swtRowTable[index];
+        row = SwtRowEntry{};
+        std::set<std::string>& supplied = filled_swtRowTable[index];
+        supplied.clear();
+        if (values.swtRowName) {
+            row.swtRowName = *values.swtRowName;
+            supplied.insert("swtRowName");
+        }
+        if (values.swtRowValue) {
+            row.swtRowValue = *values.swtRowValue;
+            supplied.insert("swtRowValue");
+        }
+        row.swtRowStatus = snmpwrap::RowStatus::NotReady;
+        try {
+            changed("swtRowStatus", index.toOid());
+        } catch (...) {
+            d.swtRowTable.erase(index);  // the hook refused the new row
+            filled_swtRowTable.erase(index);
+            throw;
+        }
+    }
+    void destroySwtRowEntry(const SwtRowEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        d.swtRowTable.erase(index);
+        filled_swtRowTable.erase(index);
+        try {
+            changed("swtRowStatus", index.toOid());
+        } catch (...) {
+            // a row that is being destroyed cannot be refused any more
+        }
+    }
+    snmpwrap::RowStatus swtRowStatus(const SwtRowEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtRowStatus", index.toOid());
+        return d.swtRowTable.at(index).swtRowStatus;
+    }
+    void setSwtRowStatus(const SwtRowEntryIndex& index, snmpwrap::RowStatus status) override {
+        std::lock_guard<std::mutex> l(mu);
+        d.swtRowTable.at(index).swtRowStatus = status;
+    }
+    bool swtRowEntryComplete(const SwtRowEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        const auto it = filled_swtRowTable.find(index);
+        if (it == filled_swtRowTable.end()) return true;
+        return it->second.count("swtRowName");
+    }
+    std::vector<SwtConnEntryIndex> swtConnTableRows() override {
+        std::lock_guard<std::mutex> l(mu);
+        std::vector<SwtConnEntryIndex> r;
+        for (const auto& kv : d.swtConnTable) r.push_back(kv.first);
+        return r;
+    }
+    std::optional<SwtConnEntryIndex> swtConnTableNext(const snmpwrap::Oid* after) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& rows = d.swtConnTable;  // ordered like the OIDs of the indexes
+        if (!after) return rows.empty() ? std::nullopt : std::optional<SwtConnEntryIndex>(rows.begin()->first);
+        if (const auto idx = SwtConnEntryIndex::fromOid(*after)) {
+            const auto it = rows.upper_bound(*idx);
+            return it == rows.end() ? std::nullopt : std::optional<SwtConnEntryIndex>(it->first);
+        }
+        for (const auto& kv : rows)  // not a complete index: scan
+            if (kv.first.toOid() > *after) return kv.first;
+        return std::nullopt;
+    }
+    bool swtConnTableHas(const SwtConnEntryIndex& index) override { std::lock_guard<std::mutex> l(mu); return d.swtConnTable.count(index) != 0; }
+    SwtConnState swtConnState(const SwtConnEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtConnState", index.toOid());
+        return d.swtConnTable.at(index).swtConnState;
+    }
+    void setSwtConnState(const SwtConnEntryIndex& index, SwtConnState value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtConnTable.at(index).swtConnState;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtConnState", index.toOid());
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::vector<SwtBigEntryIndex> swtBigTableRows() override {
+        std::lock_guard<std::mutex> l(mu);
+        std::vector<SwtBigEntryIndex> r;
+        for (const auto& kv : d.swtBigTable) r.push_back(kv.first);
+        return r;
+    }
+    std::optional<SwtBigEntryIndex> swtBigTableNext(const snmpwrap::Oid* after) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& rows = d.swtBigTable;  // ordered like the OIDs of the indexes
+        if (!after) return rows.empty() ? std::nullopt : std::optional<SwtBigEntryIndex>(rows.begin()->first);
+        if (const auto idx = SwtBigEntryIndex::fromOid(*after)) {
+            const auto it = rows.upper_bound(*idx);
+            return it == rows.end() ? std::nullopt : std::optional<SwtBigEntryIndex>(it->first);
+        }
+        for (const auto& kv : rows)  // not a complete index: scan
+            if (kv.first.toOid() > *after) return kv.first;
+        return std::nullopt;
+    }
+    bool swtBigTableHas(const SwtBigEntryIndex& index) override { std::lock_guard<std::mutex> l(mu); return d.swtBigTable.count(index) != 0; }
+    std::uint32_t swtBigValue(const SwtBigEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtBigValue", index.toOid());
+        return d.swtBigTable.at(index).swtBigValue;
+    }
+    std::uint32_t swtBigDouble(const SwtBigEntryIndex& index) override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtBigDouble", index.toOid());
+        return d.swtBigTable.at(index).swtBigDouble;
+    }
+    std::string swtName() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtName");
+        return d.swtScalars.swtName;
+    }
+    void setSwtName(const std::string& value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtScalars.swtName;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtName");
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::uint32_t swtCounter() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtCounter");
+        return d.swtScalars.swtCounter;
+    }
+    std::uint32_t swtGauge() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtGauge");
+        return d.swtScalars.swtGauge;
+    }
+    std::int32_t swtLimit() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtLimit");
+        return d.swtScalars.swtLimit;
+    }
+    void setSwtLimit(std::int32_t value) override {
+        std::lock_guard<std::mutex> l(mu);
+        auto& slot = d.swtScalars.swtLimit;
+        const auto old = slot;
+        slot = value;
+        try {
+            changed("swtLimit");
+        } catch (...) {
+            slot = old;  // the hook refused the change
+            throw;
+        }
+    }
+    std::uint32_t swtUptime() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtUptime");
+        return d.swtScalars.swtUptime;
+    }
+    std::uint64_t swtBigCounter() override {
+        std::lock_guard<std::mutex> l(mu);
+        reading("swtBigCounter");
+        return d.swtScalars.swtBigCounter;
+    }
+};
+
+DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {
+    registerMib(agent, *impl_);
+}
+
+DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_unique<Impl>(data)) {
+    bind(mib, *impl_);
+}
+
+DataAgent::~DataAgent() = default;
+
+std::unique_lock<std::mutex> DataAgent::lock() { return std::unique_lock<std::mutex>(impl_->mu); }
+
+void DataAgent::onSet(SetHook hook) {
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->hook = std::move(hook);
+}
+
+void DataAgent::onGet(GetHook hook) {
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->getHook = std::move(hook);
 }
 
 }  // namespace snmpwrapper_test_mib

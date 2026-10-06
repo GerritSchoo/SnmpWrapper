@@ -4,7 +4,10 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -210,6 +213,88 @@ public:
 
 private:
     snmpwrap::Client& c_;
+};
+
+/// @brief Rows of sensorTable by index, in SNMP (OID) order. Used in Data; add a row by accessing it.
+class SensorEntryTable : public std::map<SensorEntryIndex, SensorEntry> {
+public:
+    using std::map<SensorEntryIndex, SensorEntry>::map;
+    using std::map<SensorEntryIndex, SensorEntry>::operator[];
+    /// @brief Row for a plain index number (creates the row if it does not exist yet).
+    SensorEntry& operator[](std::int32_t sensorIndex) { return (*this)[SensorEntryIndex{sensorIndex}]; }
+};
+
+/**
+ * @brief All values of SNMPWRAPPER-DEMO-MIB as one nested C++ structure that follows the MIB tree.
+ *
+ * Groups are nested structs (they hold no values themselves), scalars are plain members, tables are
+ * row containers: `data.group.table[index].column`. Reading and writing is ordinary C++ - no agent is
+ * needed. Local assignments are NOT range-checked; call validate() to check every value against the MIB.
+ * Serve it with DataAgent.
+ */
+struct Data {
+    std::string deviceName{};  ///< deviceName (read-write, DisplayString SIZE(1..32)). Name of the device.
+    std::uint32_t deviceUptime{};  ///< deviceUptime (read-only, TimeTicks). Time since the device started.
+    std::int32_t alarmThreshold{};  ///< alarmThreshold (read-write, Integer (0..100), UNITS "degrees Celsius"). An enabled sensor above this temperature raises sensorAlarm.
+    SensorEntryTable sensorTable;  ///< sensorTable: The temperature sensors of the device.
+
+    /// @brief Checks every value against the MIB (type, range, SIZE, named numbers).
+    /// @return One text per violation, e.g. "group.object: value must be in 0..100"; empty if all values are valid.
+    std::vector<std::string> validate() const;
+};
+
+/**
+ * @brief Serves a Data structure through an snmpwrap::Agent.
+ *
+ * GET / GETNEXT read the structure, SET on writable objects (checked against the MIB) writes it. Table rows
+ * are created and destroyed through RowStatus where the MIB defines it. Agent callbacks run in the thread of
+ * Agent::poll() and hold an internal mutex; every other thread that touches the Data must hold lock():
+ * @code
+ * snmpwrap::Agent agent;
+ * snmpwrapper_demo_mib::Data data;
+ * snmpwrapper_demo_mib::DataAgent adapter(agent, data);
+ * while (agent.poll()) {
+ *     auto guard = adapter.lock();   // never keep it across poll()
+ *     data.<group>.<object> = 42;
+ * }
+ * @endcode
+ * @note Data and the Agent must outlive the DataAgent. Not copyable.
+ */
+class DataAgent {
+public:
+    /// @brief Called after a manager changed a value: the MIB object name and, for table cells, the row index (else empty).
+    /// May throw snmpwrap::SetError to refuse a value change or a new row (the request is rolled back); the destruction
+    /// of a row cannot be refused. Runs inside the agent
+    /// callback with the mutex held (do not call lock() from it), possibly before the whole request is committed.
+    using SetHook = std::function<void(const std::string& object, const snmpwrap::Oid& index)>;
+
+    /// @brief Called before a manager reads a value (GET, GETNEXT, walk): the MIB object name and, for table cells, the row
+    /// index (else empty). Update the Data here for values that are computed on demand (counters, uptime, live readings).
+    /// Runs inside the agent callback with the mutex held: write the Data directly, do not call lock().
+    using GetHook = std::function<void(const std::string& object, const snmpwrap::Oid& index)>;
+
+    /// @brief Registers all objects of SNMPWRAPPER-DEMO-MIB in @p agent.
+    /// @param[in] agent The agent. @param[in] data The values to serve; must outlive this object.
+    /// @throws snmpwrap::Error if the registration fails.
+    DataAgent(snmpwrap::Agent& agent, Data& data);
+    /// @brief Adds all objects to an existing Mib whose root lies above them (custom handlers, tests without an agent).
+    /// @param[in] mib The Mib. @param[in] data The values to serve; must outlive this object and the Mib.
+    /// @throws snmpwrap::Error if an object is outside the Mib root or already defined.
+    DataAgent(snmpwrap::Mib& mib, Data& data);
+    ~DataAgent();
+    DataAgent(const DataAgent&) = delete;
+    DataAgent& operator=(const DataAgent&) = delete;
+
+    /// @brief Locks the data against the agent callbacks. @return The held lock (RAII).
+    std::unique_lock<std::mutex> lock();
+    /// @brief Sets the hook for changes made by managers (see SetHook). @param[in] hook The hook, or an empty function.
+    void onSet(SetHook hook);
+    /// @brief Sets the hook that runs before values are read (see GetHook). @param[in] hook The hook, or an empty function.
+    void onGet(GetHook hook);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace snmpwrapper_demo_mib
