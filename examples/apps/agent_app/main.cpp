@@ -48,10 +48,21 @@ int main(int argc, char** argv) {
 
         // --- 2. serve it -----------------------------------------------------------------------------
         mib::DataAgent adapter(agent, data);
-        adapter.onSet([&](const std::string& object, const snmpwrap::Oid& index) {  // a manager changed a value
-            if (object == "appLimit" && data.appSensors.appLimit < 10)  // an extra rule on top of the MIB's 0..100
-                throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10 is not allowed");
-            std::cout << object << (index.empty() ? "" : "." + index.str()) << " was changed by a manager" << std::endl;
+        adapter.onSet([&](mib::Object object, const snmpwrap::Oid& index) {  // a manager changed a value
+            switch (object) {
+                case mib::Object::appLimit:                                   // a setting (manager -> agent)
+                    if (data.appSensors.appLimit < 10)                        // an extra rule on top of the MIB's 0..100
+                        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10 is not allowed");
+                    break;
+                case mib::Object::appSensorMode:                              // a command for one row
+                    std::cout << "sensor " << mib::AppSensorEntryIndex::fromOid(index)->appSensorIndex << " switched "
+                              << mib::toString(data.appSensors.appSensorTable.at(*mib::AppSensorEntryIndex::fromOid(index)).appSensorMode)
+                              << std::endl;
+                    break;
+                default:
+                    break;
+            }
+            std::cout << mib::toString(object) << (index.empty() ? "" : "." + index.str()) << " was changed by a manager" << std::endl;
         });
 
         // --- your own thread: new measurements; it touches `data` only under the lock ---------------------

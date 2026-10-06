@@ -540,6 +540,17 @@ bool plainIntegerIndex(const Table& t) {
 
 std::string tableType(const Table& t) { return t.entryType + "Table"; }
 
+/// Every object that has a value: readable scalars, columns and RowStatus columns (in OID order per kind).
+std::vector<const MibNode*> valueObjects(const Module& mod) {
+    std::vector<const MibNode*> out(mod.scalars.begin(), mod.scalars.end());
+    for (const Table& t : mod.tables) {
+        out.insert(out.end(), t.columns.begin(), t.columns.end());
+        if (t.rowStatus) out.push_back(t.rowStatus);
+    }
+    std::sort(out.begin(), out.end(), [](const MibNode* a, const MibNode* b) { return a->oid < b->oid; });
+    return out;
+}
+
 void emitTableContainer(W& w, const Table& t) {
     const std::string base = "std::map<" + t.indexType + ", " + t.entryType + ">";
     w("/// @brief Rows of " + t.table->name + " by index, in SNMP (OID) order. Used in Data; add a row by accessing it.");
@@ -595,7 +606,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
         const std::string f = ident(n->name), F = upperFirst(n->name), m = path + memberName(n->name);
         w("    " + cppType(*n) + " " + f + "() override {");
         w("        std::lock_guard<std::mutex> l(mu);");
-        w("        reading(\"" + n->name + "\");");
+        w("        reading(Object::" + ident(n->name) + ");");
         w("        return d." + m + ";");
         w("    }");
         if (n->writable()) {
@@ -605,7 +616,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("        const auto old = slot;");
             w("        slot = value;");
             w("        try {");
-            w("            changed(\"" + n->name + "\");");
+            w("            changed(Object::" + ident(n->name) + ");");
             w("        } catch (...) {");
             w("            slot = old;  // the hook refused the change");
             w("            throw;");
@@ -648,7 +659,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             const std::string src = indexNames.count(c->name) ? "index." + ident(c->name) : tbl + ".at(index)." + ident(c->name);
             w("    " + cppType(*c) + " " + f + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
-            w("        reading(\"" + c->name + "\", index.toOid());");
+            w("        reading(Object::" + ident(c->name) + ", index.toOid());");
             w("        return " + src + ";");
             w("    }");
             if (c->writable()) {
@@ -658,7 +669,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
                 w("        const auto old = slot;");
                 w("        slot = value;");
                 w("        try {");
-                w("            changed(\"" + c->name + "\", index.toOid());");
+                w("            changed(Object::" + ident(c->name) + ", index.toOid());");
                 w("        } catch (...) {");
                 w("            slot = old;  // the hook refused the change");
                 w("            throw;");
@@ -681,7 +692,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
                 w("        if (values." + ident(c->name) + ") {\n            row." + ident(c->name) + " = *values." + ident(c->name) + ";\n            supplied.insert(\"" + c->name + "\");\n        }");
             w("        row." + rs + " = snmpwrap::RowStatus::NotReady;");
             w("        try {");
-            w("            changed(\"" + t.rowStatus->name + "\", index.toOid());");
+            w("            changed(Object::" + ident(t.rowStatus->name) + ", index.toOid());");
             w("        } catch (...) {");
             w("            " + tbl + ".erase(index);  // the hook refused the new row");
             w("            " + filled + ".erase(index);");
@@ -693,14 +704,14 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("        " + tbl + ".erase(index);");
             w("        " + filled + ".erase(index);");
             w("        try {");
-            w("            changed(\"" + t.rowStatus->name + "\", index.toOid());");
+            w("            changed(Object::" + ident(t.rowStatus->name) + ", index.toOid());");
             w("        } catch (...) {");
             w("            // a row that is being destroyed cannot be refused any more");
             w("        }");
             w("    }");
             w("    snmpwrap::RowStatus " + rs + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
-            w("        reading(\"" + t.rowStatus->name + "\", index.toOid());");
+            w("        reading(Object::" + ident(t.rowStatus->name) + ", index.toOid());");
             w("        return " + tbl + ".at(index)." + rs + ";");
             w("    }");
             w("    void set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) override {");
@@ -1152,6 +1163,13 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
 
     // --- Data model + DataAgent
     if (mod.hasData) {
+        w("/// @brief Every object of " + mod.name + " that has a value - tells the DataAgent hooks which object is meant.");
+        w("enum class Object {");
+        for (const MibNode* n : valueObjects(mod)) w("    " + ident(n->name) + ",  ///< " + n->name + " (" + toString(n->access) + ")");
+        w("};");
+        w("/// @brief MIB name of an object. @param[in] o The object. @return E.g. \"" + valueObjects(mod).front()->name + "\".");
+        w("const char* toString(Object o) noexcept;");
+        w();
         for (const Table& t : mod.tables) emitTableContainer(w, t);
         w("/**");
         w(" * @brief All values of " + mod.name + " as one nested C++ structure that follows the MIB tree.");
@@ -1188,16 +1206,17 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w(" */");
         w("class DataAgent {");
         w("public:");
-        w("    /// @brief Called after a manager changed a value: the MIB object name and, for table cells, the row index (else empty).");
+        w("    /// @brief Called after a manager changed a value: which object (switch over Object) and, for table cells, the row");
+        w("    /// index (else empty; decode it with the table's ...Index::fromOid()).");
         w("    /// May throw snmpwrap::SetError to refuse a value change or a new row (the request is rolled back); the destruction");
         w("    /// of a row cannot be refused. Runs inside the agent");
         w("    /// callback with the mutex held (do not call lock() from it), possibly before the whole request is committed.");
-        w("    using SetHook = std::function<void(const std::string& object, const snmpwrap::Oid& index)>;");
+        w("    using SetHook = std::function<void(Object object, const snmpwrap::Oid& index)>;");
         w();
-        w("    /// @brief Called before a manager reads a value (GET, GETNEXT, walk): the MIB object name and, for table cells, the row");
+        w("    /// @brief Called before a manager reads a value (GET, GETNEXT, walk): which object and, for table cells, the row");
         w("    /// index (else empty). Update the Data here for values that are computed on demand (counters, uptime, live readings).");
         w("    /// Runs inside the agent callback with the mutex held: write the Data directly, do not call lock().");
-        w("    using GetHook = std::function<void(const std::string& object, const snmpwrap::Oid& index)>;");
+        w("    using GetHook = std::function<void(Object object, const snmpwrap::Oid& index)>;");
         w();
         w("    /// @brief Registers all objects of " + mod.name + " in @p agent.");
         w("    /// @param[in] agent The agent. @param[in] data The values to serve; must outlive this object.");
@@ -1603,6 +1622,13 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     }
     // Data model
     if (mod.hasData) {
+        w("const char* toString(Object o) noexcept {");
+        w("    switch (o) {");
+        for (const MibNode* n : valueObjects(mod)) w("        case Object::" + ident(n->name) + ": return \"" + n->name + "\";");
+        w("    }");
+        w("    return \"?\";");
+        w("}");
+        w();
         w("std::vector<std::string> Data::validate() const {");
         w("    std::vector<std::string> bad;");
         w("    auto check = [&bad](const std::string& where, const std::string& object, const auto& fn) {");
@@ -1624,10 +1650,10 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    std::mutex mu;");
         w("    SetHook hook;");
         w("    GetHook getHook;");
-        w("    void changed(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
+        w("    void changed(Object object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
         w("        if (hook) hook(object, index);");
         w("    }");
-        w("    void reading(const char* object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
+        w("    void reading(Object object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
         w("        if (getHook) getHook(object, index);");
         w("    }");
         w();

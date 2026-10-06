@@ -67,15 +67,21 @@ int main(int argc, char** argv) {
         // --- serve it ------------------------------------------------------------------------------------
         DataAgent adapter(agent, data);
 
-        adapter.onGet([&](const std::string& object, const snmpwrap::Oid&) {  // values computed when they are read
-            if (object == "swtCounter") ++data.swtScalars.swtCounter;
-            else if (object == "swtGauge") data.swtScalars.swtGauge = seconds() % 100;
-            else if (object == "swtUptime") data.swtScalars.swtUptime = seconds() * 100;
+        adapter.onGet([&](Object object, const snmpwrap::Oid&) {  // values computed when they are read
+            switch (object) {
+                case Object::swtCounter: ++data.swtScalars.swtCounter; break;
+                case Object::swtGauge: data.swtScalars.swtGauge = seconds() % 100; break;
+                case Object::swtUptime: data.swtScalars.swtUptime = seconds() * 100; break;
+                default: break;
+            }
         });
-        adapter.onSet([&](const std::string& object, const snmpwrap::Oid& index) {  // a manager changed something
+        adapter.onSet([&](Object object, const snmpwrap::Oid& index) {  // a manager changed something
             std::string written;
-            if (object == "swtEntryName") written = data.swtTable.at(*SwtEntryIndex::fromOid(index)).swtEntryName;
-            else if (object == "swtRowName") written = data.swtRowTable.at(*SwtRowEntryIndex::fromOid(index)).swtRowName;
+            switch (object) {
+                case Object::swtEntryName: written = data.swtTable.at(*SwtEntryIndex::fromOid(index)).swtEntryName; break;
+                case Object::swtRowName: written = data.swtRowTable.at(*SwtRowEntryIndex::fromOid(index)).swtRowName; break;
+                default: break;
+            }
             if (written == "commitfail") throw snmpwrap::SetError(snmpwrap::ErrorStatus::CommitFailed, "injected failure");
         });
 

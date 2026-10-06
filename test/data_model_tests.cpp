@@ -239,14 +239,14 @@ void testRowStatus() {
 void testHook() {
     Served s;
     std::vector<std::string> events;
-    s.adapter.onSet([&](const std::string& object, const Oid& index) { events.push_back(object + "@" + index.str()); });
+    s.adapter.onSet([&](m::Object object, const Oid& index) { events.push_back(std::string(m::toString(object)) + "@" + index.str()); });
     CHECK(!trySet(s.mib, {{scalar(m::oids::boatName), Value::string("hooked")}}));
     CHECK(!trySet(s.mib, {{cell(m::oids::extendedRollSensor, m::ExtendedRollEntryIndex{2}.toOid()), Value::string("g2")}}));
     CHECK((events == std::vector<std::string>{"boatName@", "extendedRollSensor@2"}));
 
     // a hook that throws SetError refuses the change; the old value comes back
-    s.adapter.onSet([](const std::string& object, const Oid&) {
-        if (object == "boatName") throw SetError(ErrorStatus::InconsistentValue, "not now");
+    s.adapter.onSet([](m::Object object, const Oid&) {
+        if (object == m::Object::boatName) throw SetError(ErrorStatus::InconsistentValue, "not now");
     });
     const auto e = trySet(s.mib, {{scalar(m::oids::boatName), Value::string("refused")}});
     CHECK(e && e->status() == ErrorStatus::InconsistentValue);
@@ -256,9 +256,9 @@ void testHook() {
 void testGetHook() {
     Served s;
     int reads = 0;
-    s.adapter.onGet([&](const std::string& object, const Oid& index) {
+    s.adapter.onGet([&](m::Object object, const Oid& index) {
         ++reads;
-        if (object == "extendedRollCounter") s.data.attitude.extendedRollTable.at(*m::ExtendedRollEntryIndex::fromOid(index)).extendedRollCounter += 100;
+        if (object == m::Object::extendedRollCounter) s.data.attitude.extendedRollTable.at(*m::ExtendedRollEntryIndex::fromOid(index)).extendedRollCounter += 100;
     });
     const Oid counter = cell(m::oids::extendedRollCounter, m::ExtendedRollEntryIndex{1}.toOid());
     CHECK(s.mib.get(counter) == Value::counter32(107));  // 7 + 100: the hook ran before the read
