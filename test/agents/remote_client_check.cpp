@@ -56,6 +56,26 @@ int main(int argc, char** argv) {
         check(remote.swtConnTable[{{10, 0, 0, 1}, 80, "web"}].swtConnState.get() == SwtConnState::established,
               "swtConnTable[(10.0.0.1, 80, 'web')]");
 
+        // several values in ONE request: all or nothing
+        remote.change().set(remote.swtScalars.swtLimit, 66).set(remote.swtTable[2].swtEntryValue, 222u).send();
+        check(remote.swtScalars.swtLimit.get() == 66 && remote.swtTable[2].swtEntryValue.get() == 222, "change(): both values written");
+        bool refused = false;
+        try {
+            remote.change().set(remote.swtScalars.swtLimit, 77).set(remote.swtTable[1].swtEntryName, "commitfail").send();
+        } catch (const snmpwrap::ResponseError& e) {
+            refused = e.status() == snmpwrap::ErrorStatus::CommitFailed && e.index() == 2;
+        }
+        check(refused && remote.swtScalars.swtLimit.get() == 66 && remote.swtTable[1].swtEntryName.get() == "eth0",
+              "change(): agent refuses the 2nd value -> nothing written, error names value 2");
+        bool local = false;
+        try {
+            remote.change().set(remote.swtScalars.swtLimit, 500);
+        } catch (const snmpwrap::SetError&) {
+            local = true;
+        }
+        check(local, "change(): MIB check when a value is added");
+        remote.change().set(remote.swtScalars.swtLimit, before).set(remote.swtTable[2].swtEntryValue, 200u).send();
+
         // everything at once into a Data structure (one walk)
         const Data snapshot = remote.read();
         check(snapshot.swtScalars.swtName == remote.swtScalars.swtName.get(), "read(): scalar in a group");

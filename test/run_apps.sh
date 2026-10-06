@@ -54,6 +54,7 @@ check "row access"                  "$out" "sensor 1 is cpu"
 check "read() into Data"            "$out" "snapshot: my-app, limit 30, 3 sensors"
 check "SET scalar in a group"       "$out" "appLimit is now 35"
 check "SET enum cell"               "$out" "sensor 3 is now on"
+check "several values at once"      "$out" "changed together: my-app-2, sensor 2 off"
 check "MIB check before sending"    "$out" "rejected before sending"
 check "agent's own rule (onSet)"    "$out" "agent refused"
 sleep 0.5

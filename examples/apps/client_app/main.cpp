@@ -47,6 +47,14 @@ int main(int argc, char** argv) {
         std::cout << "sensor 3 is now " << mib::toString(remote.appSensors.appSensorTable[3].appSensorMode.get()) << "\n";
         remote.appSensors.appSensorTable[3].appSensorMode.set(mib::AppSensorMode::off);
 
+        // several values in ONE request: the agent writes all of them or none
+        remote.change()
+            .set(remote.appName, "my-app-2")
+            .set(remote.appSensors.appSensorTable[2].appSensorMode, mib::AppSensorMode::off)
+            .send();
+        std::cout << "changed together: " << remote.appName.get() << ", sensor 2 "
+                  << mib::toString(remote.appSensors.appSensorTable[2].appSensorMode.get()) << "\n";
+
         // the three kinds of errors
         try {
             remote.appSensors.appLimit.set(500);  // MIB: 0..100

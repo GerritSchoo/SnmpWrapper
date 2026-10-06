@@ -754,7 +754,7 @@ void emitRemoteHelpers(W& w) {
     w("};");
     w();
     w("/// @brief Writable scalar.");
-    w("template <auto Get, auto Set>");
+    w("template <auto Get, auto Set, auto Make>");
     w("class RwScalar : public RoScalar<Get> {");
     w("public:");
     w("    using RoScalar<Get>::RoScalar;");
@@ -762,6 +762,9 @@ void emitRemoteHelpers(W& w) {
     w("    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError");
     w("    template <class V>");
     w("    void set(V&& value) const { (this->c_->*Set)(std::forward<V>(value)); }");
+    w("    /// @brief The checked value as a varbind, for Change. @param[in] value New value. @return OID + value.");
+    w("    template <class V>");
+    w("    snmpwrap::VarBind varbind(V&& value) const { return (this->c_->*Make)(std::forward<V>(value)); }");
     w("};");
     w();
     w("/// @brief Read-only table cell.");
@@ -778,7 +781,7 @@ void emitRemoteHelpers(W& w) {
     w("};");
     w();
     w("/// @brief Writable table cell.");
-    w("template <class Index, auto Get, auto Set>");
+    w("template <class Index, auto Get, auto Set, auto Make>");
     w("class RwCell : public RoCell<Index, Get> {");
     w("public:");
     w("    using RoCell<Index, Get>::RoCell;");
@@ -786,6 +789,33 @@ void emitRemoteHelpers(W& w) {
     w("    /// @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError");
     w("    template <class V>");
     w("    void set(V&& value) const { (this->c_->*Set)(this->index_, std::forward<V>(value)); }");
+    w("    /// @brief The checked value as a varbind, for Change. @param[in] value New value. @return OID + value.");
+    w("    template <class V>");
+    w("    snmpwrap::VarBind varbind(V&& value) const { return (this->c_->*Make)(this->index_, std::forward<V>(value)); }");
+    w("};");
+    w();
+    w("/**");
+    w(" * @brief Several values in ONE SET request: the agent writes all of them or none (see Remote::change()).");
+    w(" * Every value is checked against the MIB when it is added (snmpwrap::SetError).");
+    w(" */");
+    w("class Change {");
+    w("public:");
+    w("    explicit Change(snmpwrap::Client& session) : s_(&session) {}");
+    w("    /// @brief Adds a value. @param[in] target A writable scalar or cell of Remote. @param[in] value New value. @return *this.");
+    w("    template <class Target, class V>");
+    w("    Change& set(const Target& target, V&& value) {");
+    w("        vbs_.push_back(target.varbind(std::forward<V>(value)));");
+    w("        return *this;");
+    w("    }");
+    w("    /// @brief Sends all values in one request. @throws snmpwrap::ResponseError (index() = 1-based position), snmpwrap::TransportError");
+    w("    void send() {");
+    w("        s_->set(vbs_);");
+    w("        vbs_.clear();");
+    w("    }");
+    w();
+    w("private:");
+    w("    snmpwrap::Client* s_;");
+    w("    std::vector<snmpwrap::VarBind> vbs_;");
     w("};");
     w();
     w("}  // namespace remote_detail");
@@ -794,13 +824,13 @@ void emitRemoteHelpers(W& w) {
 
 std::string remoteScalarType(const MibNode& n) {
     const std::string get = "&Client::" + ident(n.name);
-    return n.writable() ? "remote_detail::RwScalar<" + get + ", &Client::set" + upperFirst(n.name) + ">"
+    return n.writable() ? "remote_detail::RwScalar<" + get + ", &Client::set" + upperFirst(n.name) + ", &Client::make" + upperFirst(n.name) + ">"
                         : "remote_detail::RoScalar<" + get + ">";
 }
 
 std::string remoteCellType(const Table& t, const MibNode& c) {
     const std::string get = "&Client::" + ident(c.name);
-    return c.writable() ? "remote_detail::RwCell<" + t.indexType + ", " + get + ", &Client::set" + upperFirst(c.name) + ">"
+    return c.writable() ? "remote_detail::RwCell<" + t.indexType + ", " + get + ", &Client::set" + upperFirst(c.name) + ", &Client::make" + upperFirst(c.name) + ">"
                         : "remote_detail::RoCell<" + t.indexType + ", " + get + ">";
 }
 
@@ -823,7 +853,7 @@ void emitRemoteTable(W& w, const Table& t) {
     for (const MibNode* c : t.columns) w("    " + remoteCellType(t, *c) + " " + ident(c->name) + ";  ///< " + c->name + " (" + accessText(*c) + ")");
     if (t.rowStatus)
         w("    remote_detail::RwCell<" + t.indexType + ", &Client::" + ident(t.rowStatus->name) + ", &Client::set" + upperFirst(t.rowStatus->name) +
-          "> " + ident(t.rowStatus->name) + ";  ///< " + t.rowStatus->name + " (RowStatus)");
+          ", &Client::make" + upperFirst(t.rowStatus->name) + "> " + ident(t.rowStatus->name) + ";  ///< " + t.rowStatus->name + " (RowStatus)");
     w();
     w("    /// @brief The row index. @return The index this row is bound to.");
     w("    const " + t.indexType + "& index() const { return index_; }");
@@ -1131,6 +1161,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         if (n->writable()) {
             w("    /// @brief SET " + n->name + ".0. @param[in] value New value. @throws snmpwrap::SetError (MIB check), snmpwrap::TransportError, snmpwrap::ResponseError");
             w("    void set" + F + "(" + paramType(*n) + " value);");
+            w("    /// @brief Checked varbind for " + n->name + ".0 (nothing is sent). @param[in] value New value. @return OID + value.");
+            w("    snmpwrap::VarBind make" + F + "(" + paramType(*n) + " value);");
         }
     }
     for (const Table& t : mod.tables) {
@@ -1144,6 +1176,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
             if (c->writable()) {
                 w("    /// @brief SET one cell of " + c->name + ". @param[in] index Row index. @param[in] value New value.");
                 w("    void set" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value);");
+                w("    /// @brief Checked varbind for one cell of " + c->name + " (nothing is sent). @return OID + value.");
+                w("    snmpwrap::VarBind make" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value);");
             }
         }
         if (t.rowStatus) {
@@ -1151,6 +1185,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
             w("    snmpwrap::RowStatus " + ident(t.rowStatus->name) + "(" + ip + ");");
             w("    /// @brief SET " + t.rowStatus->name + " (e.g. Active / NotInService). @param[in] index Row index. @param[in] status New status.");
             w("    void set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status);");
+            w("    /// @brief Varbind for " + t.rowStatus->name + " (nothing is sent). @return OID + value.");
+            w("    snmpwrap::VarBind make" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status);");
             w("    /**");
             w("     * @brief Creates a row in ONE request: the given columns plus createAndGo (or createAndWait).");
             w("     * @param[in] index    Row index.");
@@ -1283,6 +1319,9 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    /// @brief Reads every value of " + mod.name + " from the agent in one walk (GETBULK on v2c/v3) into a Data structure.");
         w("    /// @return All scalars and table rows the agent has. @throws snmpwrap::TransportError, snmpwrap::ResponseError");
         w("    Data read();");
+        w("    /// @brief Starts a request that sets several values at once (all or nothing):");
+        w("    /// `remote.change().set(remote.a.b, 1).set(remote.t[2].c, 5).send();` @return The (empty) change.");
+        w("    remote_detail::Change change() { return remote_detail::Change(flat_.session()); }");
         w();
         const std::string b = body.str();
         w(b.substr(0, b.empty() ? 0 : b.size() - 1));
@@ -1545,10 +1584,15 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("}");
         w();
         if (n->writable()) {
-            w("void Client::set" + F + "(" + paramType(*n) + " value) {");
-            w("    const snmpwrap::Value v = " + toValue(*n, "value") + ";");
+            w("snmpwrap::VarBind Client::make" + F + "(" + paramType(*n) + " value) {");
+            w("    snmpwrap::Value v = " + toValue(*n, "value") + ";");
             w("    " + checkFn(*n) + "(v);");
-            w("    c_.set(oids::" + f + " + snmpwrap::SubId{0}, v);");
+            w("    return {oids::" + f + " + snmpwrap::SubId{0}, std::move(v)};");
+            w("}");
+            w();
+            w("void Client::set" + F + "(" + paramType(*n) + " value) {");
+            w("    const snmpwrap::VarBind vb = make" + F + "(value);");
+            w("    c_.set(vb.oid, vb.value);");
             w("}");
             w();
         }
@@ -1590,10 +1634,15 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("}");
             w();
             if (c->writable()) {
-                w("void Client::set" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
-                w("    const snmpwrap::Value v = " + toValue(*c, "value") + ";");
+                w("snmpwrap::VarBind Client::make" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
+                w("    snmpwrap::Value v = " + toValue(*c, "value") + ";");
                 w("    " + checkFn(*c) + "(v);");
-                w("    c_.set(oids::" + f + " + index.toOid(), v);");
+                w("    return {oids::" + f + " + index.toOid(), std::move(v)};");
+                w("}");
+                w();
+                w("void Client::set" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
+                w("    const snmpwrap::VarBind vb = make" + upperFirst(c->name) + "(index, value);");
+                w("    c_.set(vb.oid, vb.value);");
                 w("}");
                 w();
             }
@@ -1603,6 +1652,10 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("snmpwrap::RowStatus Client::" + rs + "(" + ip + ") {");
             w("    const snmpwrap::VarBind vb = c_.get(oids::" + rs + " + index.toOid());");
             w("    return static_cast<snmpwrap::RowStatus>(expect(vb, snmpwrap::Type::Integer, \"" + t.rowStatus->name + "\").asInt());");
+            w("}");
+            w();
+            w("snmpwrap::VarBind Client::make" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
+            w("    return {oids::" + rs + " + index.toOid(), snmpwrap::Value::integer(static_cast<std::int32_t>(status))};");
             w("}");
             w();
             w("void Client::set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
