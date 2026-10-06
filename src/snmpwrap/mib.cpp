@@ -89,6 +89,7 @@ public:
             }
         }
         undone_.clear();
+        finish(false);
     }
 
     void commit() noexcept override {
@@ -99,10 +100,24 @@ public:
             }
         }
         undone_.clear();
+        finish(true);
     }
 
     std::vector<Op> ops_;
     std::vector<std::function<void()>> commits_;
+    std::function<void(bool)> end_;  // Mib::onRequestEnd hook
+
+private:
+    void finish(bool committed) noexcept {
+        if (!end_) return;
+        try {
+            end_(committed);
+        } catch (...) {
+        }
+        end_ = nullptr;  // once per request
+    }
+
+public:
 
 private:
     std::vector<std::function<void()>> undone_;  // undo closures of successfully applied ops
@@ -329,6 +344,7 @@ std::optional<VarBind> Mib::getNext(const Oid& after) {
 
 std::unique_ptr<SetTransaction> Mib::prepare(const std::vector<VarBind>& sets) {
     auto txn = std::make_unique<Txn>();
+    txn->end_ = requestEnd_;
 
     struct Group {
         const TableDef* def = nullptr;

@@ -4,7 +4,8 @@
 //
 // The whole recipe:
 //   1. snmpwrap::Client session(config)       address, version, community / SNMPv3 user
-//   2. my_app_mib::Remote remote(session)     nested like the MIB: remote.group.object.get() / .set(v)
+//   2. my_app_mib::Remote remote(session)     nested like the MIB: remote.group.object.get() / .set(v),
+//                                             whole messages: remote.group.send(msg), remote.table[i].send(row)
 //   3. catch TransportError (no answer), ResponseError (agent refused), SetError (MIB check, nothing sent)
 
 #include <iostream>
@@ -54,6 +55,16 @@ int main(int argc, char** argv) {
             .send();
         std::cout << "changed together: " << remote.appName.get() << ", sensor 2 "
                   << mib::toString(remote.appSensors.appSensorTable[2].appSensorMode.get()) << "\n";
+
+        // messages: a whole subtree / a whole row in one request
+        mib::Data::AppSensorsGroup settings;
+        settings.appLimit = 25;
+        remote.appSensors.send(settings);
+        mib::AppSensorEntry row = remote.appSensors.appSensorTable[1].read();
+        row.appSensorMode = mib::AppSensorMode::off;
+        remote.appSensors.appSensorTable[1].send(row);
+        std::cout << "messages sent: limit " << remote.appSensors.appLimit.get() << ", sensor 1 "
+                  << mib::toString(remote.appSensors.appSensorTable[1].appSensorMode.get()) << "\n";
 
         // the three kinds of errors
         try {

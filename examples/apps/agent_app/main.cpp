@@ -4,7 +4,8 @@
 //
 // The whole recipe:
 //   1. fill the generated my_app_mib::Data - plain C++, nested like the MIB
-//   2. my_app_mib::DataAgent serves it; onSet tells you what a manager changed
+//   2. my_app_mib::DataAgent serves it; messages tell you what a manager changed - per value, per row or per subtree,
+//      once per request and only after it was committed; onSet can refuse a value before that
 //   3. run agent.poll() in a loop; other threads touch the data only under adapter.lock()
 
 #include <atomic>
@@ -48,21 +49,20 @@ int main(int argc, char** argv) {
 
         // --- 2. serve it -----------------------------------------------------------------------------
         mib::DataAgent adapter(agent, data);
-        adapter.onSet([&](mib::Object object, const snmpwrap::Oid& index) {  // a manager changed a value
-            switch (object) {
-                case mib::Object::appLimit:                                   // a setting (manager -> agent)
-                    if (data.appSensors.appLimit < 10)                        // an extra rule on top of the MIB's 0..100
-                        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10 is not allowed");
-                    break;
-                case mib::Object::appSensorMode:                              // a command for one row
-                    std::cout << "sensor " << mib::AppSensorEntryIndex::fromOid(index)->appSensorIndex << " switched "
-                              << mib::toString(data.appSensors.appSensorTable.at(*mib::AppSensorEntryIndex::fromOid(index)).appSensorMode)
-                              << std::endl;
-                    break;
-                default:
-                    break;
-            }
-            std::cout << mib::toString(object) << (index.empty() ? "" : "." + index.str()) << " was changed by a manager" << std::endl;
+        // check a value before it is accepted: throwing refuses the whole request
+        adapter.onSet([&](mib::Object object, const snmpwrap::Oid&) {
+            if (object == mib::Object::appLimit && data.appSensors.appLimit < 10)  // an extra rule on top of the MIB's 0..100
+                throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10 is not allowed");
+        });
+        // messages from managers, after the request was committed
+        adapter.onAppSensors([](const mib::Data::AppSensorsGroup& settings) {     // the subtree appSensors
+            std::cout << "message appSensors: limit " << settings.appLimit << std::endl;
+        });
+        adapter.onAppSensorTableRow([](const mib::AppSensorEntryIndex& index, const mib::AppSensorEntry& row) {  // one row
+            std::cout << "message sensor " << index.appSensorIndex << ": " << mib::toString(row.appSensorMode) << std::endl;
+        });
+        adapter.onMyAppMIB([](const mib::Data& all) {                             // anything in the MIB
+            std::cout << "message myAppMIB: name " << all.appName << std::endl;
         });
 
         // --- your own thread: new measurements; it touches `data` only under the lock ---------------------

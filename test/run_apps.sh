@@ -55,10 +55,17 @@ check "read() into Data"            "$out" "snapshot: my-app, limit 30, 3 sensor
 check "SET scalar in a group"       "$out" "appLimit is now 35"
 check "SET enum cell"               "$out" "sensor 3 is now on"
 check "several values at once"      "$out" "changed together: my-app-2, sensor 2 off"
+check "messages sent"               "$out" "messages sent: limit 25, sensor 1 off"
 check "MIB check before sending"    "$out" "rejected before sending"
 check "agent's own rule (onSet)"    "$out" "agent refused"
 sleep 0.5
-check "agent saw the change"        "$(cat "$WORK/agent.out")" "appLimit was changed by a manager"
+agent=$(cat "$WORK/agent.out")
+check "agent: subtree message"      "$agent" "message appSensors: limit 35"
+check "agent: row message"          "$agent" "message sensor 3: on"
+check "agent: whole-MIB message"    "$agent" "message myAppMIB: name my-app-2"
+check "agent: group message (send)" "$agent" "message appSensors: limit 25"
+check "agent: row message (send)"   "$agent" "message sensor 1: off"
+check "agent: refused -> no message" "$(grep -c 'limit 5$' "$WORK/agent.out")" "0"
 check "no invalid initial values"   "$(grep -c 'invalid value' "$WORK/agent.out")" "0"
 
 echo "$fails failure(s)"

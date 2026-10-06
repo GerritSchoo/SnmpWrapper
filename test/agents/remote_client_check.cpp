@@ -76,6 +76,24 @@ int main(int argc, char** argv) {
         check(local, "change(): MIB check when a value is added");
         remote.change().set(remote.swtScalars.swtLimit, before).set(remote.swtTable[2].swtEntryValue, 200u).send();
 
+        // a subtree as one message, a row as one message, the whole MIB as one message
+        Data::SwtScalarsGroup msg;
+        msg.swtName = "message";
+        msg.swtLimit = 33;
+        remote.swtScalars.send(msg);
+        check(remote.swtScalars.swtName.get() == "message" && remote.swtScalars.swtLimit.get() == 33, "group send(): both values");
+        SwtEntry row = remote.swtTable[3].read();
+        row.swtEntryName = "loop";
+        row.swtEntryValue = 6;
+        remote.swtTable[3].send(row);
+        check(remote.swtTable[3].read().swtEntryName == "loop" && remote.swtTable[3].swtEntryValue.get() == 6, "row send()");
+        remote.swtTable[3].send(SwtEntry{"lo", 5, SwtEntryStatus::testing});
+        Data all = remote.read();
+        all.swtScalars.swtName = "snmpwrap";
+        all.swtScalars.swtLimit = before;
+        remote.send(all);
+        check(remote.swtScalars.swtName.get() == "snmpwrap" && remote.swtScalars.swtLimit.get() == before, "whole-MIB send()");
+
         // everything at once into a Data structure (one walk)
         const Data snapshot = remote.read();
         check(snapshot.swtScalars.swtName == remote.swtScalars.swtName.get(), "read(): scalar in a group");

@@ -304,6 +304,14 @@ public:
      */
     Mib& table(SubId id, TableDef def) { return table(Oid{id}, std::move(def)); }
 
+    /**
+     * @brief Sets a function that is called once at the end of every SET request that changed this Mib.
+     * @param[in] hook Called with true after the request was committed, with false after it was rolled back.
+     *                 Must not throw (exceptions are ignored). Replaces a previous hook; empty = none.
+     * @note Use it to act on a complete request instead of single values (the generated DataAgent does).
+     */
+    void onRequestEnd(std::function<void(bool committed)> hook) { requestEnd_ = std::move(hook); }
+
     /// @copydoc Handler::get
     std::optional<Value> get(const Oid& oid) override;
     /// @copydoc Handler::getNext
@@ -342,6 +350,7 @@ private:
     std::map<Oid, TableDef> tables_;    // key: relative table OID (without the entry .1)
     std::vector<Object> objects_;       // sorted by key; rebuilt lazily
     bool objectsDirty_ = true;
+    std::function<void(bool)> requestEnd_;
 };
 
 }  // namespace snmpwrap

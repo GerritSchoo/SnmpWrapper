@@ -416,6 +416,8 @@ Module collect(const MibModel& m, const Options& o) {
         for (const MibNode* n : mod.scalars) placeInGroup(m, mod, *n, false, 0);
         for (std::size_t i = 0; i < mod.tables.size(); ++i) placeInGroup(m, mod, *mod.tables[i].table, true, i);
         sortGroups(mod.data);
+        const MibNode* rootNode = m.findByOid(mod.dataRoot);
+        mod.data.mibName = rootNode && rootNode->name.rfind("anonymous#", 0) != 0 ? rootNode->name : "root";
         checkMembers(mod, mod.data, "");
         mod.hasData = true;
     }
@@ -600,8 +602,74 @@ void emitValidate(W& w, const Module& mod, const Group& g, const std::string& pa
     for (const Group& c : g.children) emitValidate(w, mod, c, path + c.member + ".", label + c.mibName + ".");
 }
 
+/// Pending flag of a group in DataAgent::Impl ("attitude." -> pend_attitude, root -> pendRoot).
+std::string pendName(std::string path) {
+    if (!path.empty() && path.back() == '.') path.pop_back();
+    if (path.empty()) return "pendRoot";
+    for (char& c : path)
+        if (c == '.') c = '_';
+    return "pend_" + path;
+}
+
+/// Does anything in this subtree accept SETs (writable scalar, writable column, RowStatus)?
+bool subtreeWritable(const Module& mod, const Group& g) {
+    for (const MibNode* n : g.scalars)
+        if (n->writable()) return true;
+    for (std::size_t i : g.tables)
+        if (mod.tables[i].anyWritable() || mod.tables[i].rowStatus) return true;
+    for (const Group& c : g.children)
+        if (subtreeWritable(mod, c)) return true;
+    return false;
+}
+
+/// Name of a DataAgent message hook: onAttitude, onAppSensorTableRow, ... (never clashes with onSet / onGet / onChanged).
+std::string hookMethod(const std::string& mibName) {
+    std::string n = upperFirst(mibName);
+    if (n == "Set" || n == "Get" || n == "Changed") n += "Group";
+    return "on" + n;
+}
+
+/// A subtree whose changes are reported as one message.
+struct MsgGroup {
+    std::string pend, method, var, qual, access, mibName;
+};
+
+void collectMsgGroups(const Module& mod, const Group& g, const std::string& path, const std::string& qual, const std::string& mibName,
+                      std::vector<MsgGroup>& out) {
+    for (const Group& c : g.children) collectMsgGroups(mod, c, path + c.member + ".", qual + "::" + c.type, c.mibName, out);  // children first
+    if (!subtreeWritable(mod, g)) return;
+    std::string access = path;
+    if (!access.empty()) access.pop_back();
+    out.push_back({pendName(path), hookMethod(mibName), "hook_" + pendName(path), qual, access.empty() ? "d" : "d." + access, mibName});
+}
+
+/// A table whose changed rows are reported as messages.
+struct MsgTable {
+    const Table* t;
+    std::string rows, var, method, access;
+};
+
+std::vector<MsgTable> collectMsgTables(const Module& mod, const std::map<std::size_t, std::string>& tablePaths) {
+    std::vector<MsgTable> out;
+    for (std::size_t i = 0; i < mod.tables.size(); ++i) {
+        const Table& t = mod.tables[i];
+        if (!t.anyWritable() && !t.rowStatus) continue;
+        const std::string m = memberName(t.table->name);
+        out.push_back({&t, "rows_" + m, "rowHook_" + m, hookMethod(t.table->name) + "Row", "d." + tablePaths.at(i)});
+    }
+    return out;
+}
+
+/// Relative member paths of all writable scalars in a subtree (for Remote ...send()).
+void writableScalarPaths(const Group& g, const std::string& rel, std::vector<std::string>& out) {
+    for (const MibNode* n : g.scalars)
+        if (n->writable()) out.push_back(rel + memberName(n->name));
+    for (const Group& c : g.children) writableScalarPaths(c, rel + c.member + ".", out);
+}
+
 /// Instrumentation overrides for one group: read / write the Data members under the adapter's mutex.
-void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) {
+/// `marks` sets the pending flags of this group and all groups above it (code).
+void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, const std::string& marks) {
     for (const MibNode* n : g.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name), m = path + memberName(n->name);
         w("    " + cppType(*n) + " " + f + "() override {");
@@ -621,6 +689,8 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("            slot = old;  // the hook refused the change");
             w("            throw;");
             w("        }");
+            w("        changes.emplace_back(Object::" + ident(n->name) + ", snmpwrap::Oid{});");
+            w("       " + marks);
             w("    }");
         }
     }
@@ -677,6 +747,9 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
                 if (t.rowStatus) {
                     w("        if (const auto it = " + filled + ".find(index); it != " + filled + ".end()) it->second.insert(\"" + c->name + "\");");
                 }
+                w("        changes.emplace_back(Object::" + f + ", index.toOid());");
+                w("        rows_" + memberName(t.table->name) + ".insert(index);");
+                w("       " + marks);
                 w("    }");
             }
         }
@@ -698,6 +771,9 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("            " + filled + ".erase(index);");
             w("            throw;");
             w("        }");
+            w("        changes.emplace_back(Object::" + rs + ", index.toOid());");
+            w("        rows_" + memberName(t.table->name) + ".insert(index);");
+            w("       " + marks);
             w("    }");
             w("    void " + t.destroyFn + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
@@ -708,6 +784,8 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("        } catch (...) {");
             w("            // a row that is being destroyed cannot be refused any more");
             w("        }");
+            w("        changes.emplace_back(Object::" + rs + ", index.toOid());");
+            w("       " + marks);
             w("    }");
             w("    snmpwrap::RowStatus " + rs + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
@@ -717,6 +795,8 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("    void set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) override {");
             w("        std::lock_guard<std::mutex> l(mu);");
             w("        " + tbl + ".at(index)." + rs + " = status;");
+            w("        rows_" + memberName(t.table->name) + ".insert(index);");
+            w("       " + marks);
             w("    }");
             // complete: every writable column without DEFVAL was supplied (the rule RowStatusSpec::requiredColumns uses)
             std::string needs;
@@ -730,7 +810,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path) 
             w("    }");
         }
     }
-    for (const Group& c : g.children) emitImpl(w, mod, c, path + c.member + ".");
+    for (const Group& c : g.children) emitImpl(w, mod, c, path + c.member + ".", marks + " " + pendName(path + c.member) + " = true;");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -860,6 +940,15 @@ void emitRemoteTable(W& w, const Table& t) {
     w("    /// @brief Reads every column of the row in ONE request. @return The row.");
     w("    /// @throws snmpwrap::Error if the row does not exist, snmpwrap::TransportError, snmpwrap::ResponseError");
     w("    " + t.entryType + " read() const;");
+    if (t.anyWritable()) {
+        w("    /// @brief Writes every writable column of the row in ONE request (all or nothing). @param[in] row The values.");
+        w("    /// @throws snmpwrap::SetError (MIB check), snmpwrap::ResponseError, snmpwrap::TransportError");
+        w("    void send(const " + t.entryType + "& row) const {");
+        w("        remote_detail::Change change(c_->session());");
+        for (const MibNode* c : t.writable()) w("        change.set(" + ident(c->name) + ", row." + ident(c->name) + ");");
+        w("        change.send();");
+        w("    }");
+    }
     w();
     w("private:");
     w("    " + t.indexType + " index_;");
@@ -904,11 +993,31 @@ void collectPaths(const Module& mod, const Group& g, const std::string& prefix, 
 }
 
 /// Members and nested group structs of Remote; `init` collects the member initializers in declaration order.
-void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::string& pad, std::vector<std::string>& init) {
+/// `send(msg)`: all writable scalars of a subtree in one request. `session` = expression of the snmpwrap::Client.
+void emitRemoteSend(W& w, const Group& g, const std::string& pad, const std::string& qual, const std::string& session,
+                    bool isConst = true) {
+    std::vector<std::string> paths;
+    writableScalarPaths(g, "", paths);
+    if (paths.empty()) return;
+    w(pad + "/// @brief Sends every writable value of this subtree in ONE request (all or nothing); tables are not included.");
+    w(pad + "/// @param[in] msg The values. @throws snmpwrap::SetError (MIB check), snmpwrap::ResponseError, snmpwrap::TransportError");
+    w(pad + "void send(const " + qual + "& msg)" + (isConst ? " const" : "") + " {");
+    w(pad + "    remote_detail::Change change(" + session + ");");
+    for (const std::string& p : paths) w(pad + "    change.set(" + p + ", msg." + p + ");");
+    w(pad + "    change.send();");
+    w(pad + "}");
+}
+
+void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::string& pad, std::vector<std::string>& init,
+                         const std::string& qual) {
     for (const Group& c : g.children) {
         std::vector<std::string> sub;
         W inner;
-        emitRemoteGroupBody(inner, mod, c, pad + "    ", sub);
+        const std::string cq = qual + "::" + c.type;
+        emitRemoteGroupBody(inner, mod, c, pad + "    ", sub, cq);
+        std::vector<std::string> paths;
+        writableScalarPaths(c, "", paths);
+        if (!paths.empty()) sub.push_back("c_(&c)");
         std::string list;
         for (std::size_t i = 0; i < sub.size(); ++i) list += (i ? ", " : "") + sub[i];
         w(pad + "/// @brief Group " + c.mibName + (c.description.empty() ? "" : ": " + doc(c.description)));
@@ -917,6 +1026,10 @@ void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::str
         std::string body = inner.str();
         if (!body.empty() && body.back() == '\n') body.pop_back();
         w(body);
+        if (!paths.empty()) {
+            emitRemoteSend(w, c, pad + "    ", cq, "c_->session()");
+            w(pad + "    Client* c_;");
+        }
         w(pad + "} " + c.member + ";");
         init.push_back(c.member + "(c)");
     }
@@ -1280,6 +1393,30 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    /// @brief Sets the hook that runs before values are read (see GetHook). @param[in] hook The hook, or an empty function.");
         w("    void onGet(GetHook hook);");
         w();
+        w("    /// @name Messages: called once per SET request, AFTER it was committed (never for a refused or rolled-back request)");
+        w("    /// The hooks run in the agent loop with the mutex held (do not call lock()); exceptions are ignored.");
+        w("    /// @{");
+        w("    /// @brief A value changed: which object and, for table cells, the row index (else empty).");
+        w("    using ChangedHook = std::function<void(Object object, const snmpwrap::Oid& index)>;");
+        w("    /// @brief Hook for every changed value. @param[in] hook The hook, or an empty function.");
+        w("    void onChanged(ChangedHook hook);");
+        {
+            std::map<const MibNode*, std::string> sp;
+            std::map<std::size_t, std::string> tp;
+            collectPaths(mod, mod.data, "", sp, tp);
+            std::vector<MsgGroup> groups;
+            collectMsgGroups(mod, mod.data, "", "Data", mod.data.mibName, groups);
+            for (const MsgGroup& g : groups) {
+                w("    /// @brief Something in the subtree " + g.mibName + " changed: the whole subtree as it is now. @param[in] hook The hook.");
+                w("    void " + g.method + "(std::function<void(const " + g.qual + "&)> hook);");
+            }
+            for (const MsgTable& t : collectMsgTables(mod, tp)) {
+                w("    /// @brief A row of " + t.t->table->name + " was changed or created: its index and the row as it is now. @param[in] hook The hook.");
+                w("    void " + t.method + "(std::function<void(const " + t.t->indexType + "&, const " + t.t->entryType + "&)> hook);");
+            }
+        }
+        w("    /// @}");
+        w();
         w("private:");
         w("    struct Impl;");
         w("    std::unique_ptr<Impl> impl_;");
@@ -1291,7 +1428,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         for (const Table& t : mod.tables) emitRemoteTable(w, t);
         W body;
         std::vector<std::string> init;
-        emitRemoteGroupBody(body, mod, mod.data, "    ", init);
+        emitRemoteGroupBody(body, mod, mod.data, "    ", init, "Data");
         std::string list = "flat_(session)";
         for (const std::string& i : init) list += ", " + i.substr(0, i.size() - 3) + "(flat_)";  // "(c)" -> "(flat_)"
         w("/**");
@@ -1325,6 +1462,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w();
         const std::string b = body.str();
         w(b.substr(0, b.empty() ? 0 : b.size() - 1));
+        emitRemoteSend(w, mod.data, "    ", "Data", "flat_.session()", false);
         w("};");
         w();
     }
@@ -1721,7 +1859,52 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("        if (getHook) getHook(object, index);");
         w("    }");
         w();
-        emitImpl(w, mod, mod.data, "");
+        emitImpl(w, mod, mod.data, "", " pendRoot = true;");
+        {
+            std::map<const MibNode*, std::string> sp;
+            std::map<std::size_t, std::string> tp;
+            collectPaths(mod, mod.data, "", sp, tp);
+            std::vector<MsgGroup> groups;
+            collectMsgGroups(mod, mod.data, "", "Data", mod.data.mibName, groups);
+            const std::vector<MsgTable> tables = collectMsgTables(mod, tp);
+            w();
+            w("    // --- messages: what the current SET request changed, reported after the commit");
+            w("    std::vector<std::pair<Object, snmpwrap::Oid>> changes;");
+            w("    ChangedHook changedHook;");
+            for (const MsgGroup& g : groups) {
+                w("    bool " + g.pend + " = false;");
+                w("    std::function<void(const " + g.qual + "&)> " + g.var + ";");
+            }
+            for (const MsgTable& t : tables) {
+                w("    std::set<" + t.t->indexType + "> " + t.rows + ";");
+                w("    std::function<void(const " + t.t->indexType + "&, const " + t.t->entryType + "&)> " + t.var + ";");
+            }
+            w("    template <class F>");
+            w("    static void quietly(F&& f) noexcept {");
+            w("        try {");
+            w("            f();");
+            w("        } catch (...) {  // the request is committed - nothing to refuse any more");
+            w("        }");
+            w("    }");
+            w("    void requestEnd(bool committed) noexcept {");
+            w("        std::lock_guard<std::mutex> l(mu);");
+            w("        if (committed) {");
+            w("            std::set<std::pair<Object, snmpwrap::Oid>> seen;");
+            w("            for (const auto& c : changes)");
+            w("                if (changedHook && seen.insert(c).second) quietly([&] { changedHook(c.first, c.second); });");
+            for (const MsgTable& t : tables) {
+                w("            if (" + t.var + ")");
+                w("                for (const auto& index : " + t.rows + ")");
+                w("                    if (const auto it = " + t.access + ".find(index); it != " + t.access + ".end()) quietly([&] { " + t.var + "(index, it->second); });");
+            }
+            for (const MsgGroup& g : groups)
+                w("            if (" + g.pend + " && " + g.var + ") quietly([&] { " + g.var + "(" + g.access + "); });");
+            w("        }");
+            w("        changes.clear();");
+            for (const MsgTable& t : tables) w("        " + t.rows + ".clear();");
+            for (const MsgGroup& g : groups) w("        " + g.pend + " = false;");
+            w("    }");
+        }
         w("};");
         w();
         // Remote: a whole row in one GET
@@ -1790,11 +1973,13 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("}");
         w();
         w("DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {");
-        w("    registerMib(agent, *impl_);");
+        w("    snmpwrap::Mib& mib = registerMib(agent, *impl_);");
+        w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
         w("}");
         w();
         w("DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_unique<Impl>(data)) {");
         w("    bind(mib, *impl_);");
+        w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
         w("}");
         w();
         w("DataAgent::~DataAgent() = default;");
@@ -1811,6 +1996,32 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    impl_->getHook = std::move(hook);");
         w("}");
         w();
+        w("void DataAgent::onChanged(ChangedHook hook) {");
+        w("    std::lock_guard<std::mutex> l(impl_->mu);");
+        w("    impl_->changedHook = std::move(hook);");
+        w("}");
+        w();
+        {
+            std::map<const MibNode*, std::string> sp;
+            std::map<std::size_t, std::string> tp;
+            collectPaths(mod, mod.data, "", sp, tp);
+            std::vector<MsgGroup> groups;
+            collectMsgGroups(mod, mod.data, "", "Data", mod.data.mibName, groups);
+            for (const MsgGroup& g : groups) {
+                w("void DataAgent::" + g.method + "(std::function<void(const " + g.qual + "&)> hook) {");
+                w("    std::lock_guard<std::mutex> l(impl_->mu);");
+                w("    impl_->" + g.var + " = std::move(hook);");
+                w("}");
+                w();
+            }
+            for (const MsgTable& t : collectMsgTables(mod, tp)) {
+                w("void DataAgent::" + t.method + "(std::function<void(const " + t.t->indexType + "&, const " + t.t->entryType + "&)> hook) {");
+                w("    std::lock_guard<std::mutex> l(impl_->mu);");
+                w("    impl_->" + t.var + " = std::move(hook);");
+                w("}");
+                w();
+            }
+        }
     }
     w("}  // namespace " + mod.ns);
     return w.str();

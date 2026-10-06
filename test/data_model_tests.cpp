@@ -307,6 +307,54 @@ void testImportedTypesAndSingleGroup() {
     CHECK(std::string(g::toString(g::SensorKind::gps)) == "gps");
 }
 
+void testMessages() {
+    Served s;
+    std::vector<std::string> log;
+    s.adapter.onChanged([&](m::Object o, const Oid& index) { log.push_back(std::string("value ") + m::toString(o) + "@" + index.str()); });
+    s.adapter.onOwnboat([&](const m::Data& d) { log.push_back("ownboat " + d.boatName); });
+    s.adapter.onNavigation([&](const m::Data::NavigationGroup& g) { log.push_back("navigation " + std::string(m::toString(g.navigationMode))); });
+    s.adapter.onAttitude([&](const m::Data::AttitudeGroup& g) { log.push_back("attitude rows=" + std::to_string(g.extendedRollTable.size())); });
+    s.adapter.onExtendedRollTableRow([&](const m::ExtendedRollEntryIndex& i, const m::ExtendedRollEntry& r) {
+        log.push_back("roll[" + std::to_string(i.extendedRollIndex) + "] " + std::to_string(r.extendedRollValue) + " " + r.extendedRollSensor);
+    });
+    s.adapter.onExtendedPitchTableRow([&](const m::ExtendedPitchEntryIndex& i, const m::ExtendedPitchEntry& r) {
+        log.push_back("pitch[" + i.extendedPitchChannel + "] " + std::to_string(static_cast<int>(r.extendedPitchStatus)));
+    });
+    const Oid roll1 = m::ExtendedRollEntryIndex{1}.toOid(), roll2 = m::ExtendedRollEntryIndex{2}.toOid();
+
+    // a scalar directly in the module and one in a group, one request: each value, each touched subtree - once
+    CHECK(!trySet(s.mib, {{scalar(m::oids::boatName), Value::string("orca")}, {scalar(m::oids::navigationMode), Value::integer(2)}}));
+    CHECK((log == std::vector<std::string>{"value boatName@", "value navigationMode@", "navigation automatic", "ownboat orca"}));
+
+    // two cells of row 1 and one of row 2: each row once, with all its new values; the attitude subtree once
+    log.clear();
+    CHECK(!trySet(s.mib, {{cell(m::oids::extendedRollValue, roll1), Value::integer(11)},
+                          {cell(m::oids::extendedRollSensor, roll1), Value::string("g-new")},
+                          {cell(m::oids::extendedRollValue, roll2), Value::integer(22)}}));
+    CHECK((log == std::vector<std::string>{"value extendedRollValue@1", "value extendedRollSensor@1", "value extendedRollValue@2",
+                                           "roll[1] 11 g-new", "roll[2] 22 gyro-2", "attitude rows=2", "ownboat orca"}));
+
+    // nothing for a refused request: an invalid value (before anything is written) ...
+    log.clear();
+    CHECK(trySet(s.mib, {{scalar(m::oids::boatName), Value::string("x")}, {scalar(m::oids::navigationMode), Value::integer(9)}}));
+    // ... or refused by onSet while writing (rolled back)
+    s.adapter.onSet([](m::Object o, const Oid&) {
+        if (o == m::Object::navigationMode) throw SetError(ErrorStatus::InconsistentValue, "no");
+    });
+    CHECK(trySet(s.mib, {{scalar(m::oids::boatName), Value::string("y")}, {scalar(m::oids::navigationMode), Value::integer(1)}}));
+    CHECK(log.empty());
+    CHECK(s.data.boatName == "orca");
+    s.adapter.onSet(nullptr);
+
+    // RowStatus: creating a row is a row message; destroying it reports the value and the subtree, but no row
+    const Oid idx = m::ExtendedPitchEntryIndex{1, "aft"}.toOid();
+    CHECK(!trySet(s.mib, {{cell(m::oids::extendedPitchValue, idx), Value::integer(5)}, {cell(m::oids::extendedPitchStatus, idx), Value::integer(4)}}));
+    CHECK((log == std::vector<std::string>{"value extendedPitchStatus@1.3.97.102.116", "pitch[aft] 1", "attitude rows=2", "ownboat orca"}));
+    log.clear();
+    CHECK(!trySet(s.mib, {{cell(m::oids::extendedPitchStatus, idx), Value::integer(6)}}));
+    CHECK((log == std::vector<std::string>{"value extendedPitchStatus@1.3.97.102.116", "attitude rows=2", "ownboat orca"}));
+}
+
 void testLock() {
     Served s;
     {
@@ -329,6 +377,7 @@ int main() {
     testGetHook();
     testRowCompleteness();
     testImportedTypesAndSingleGroup();
+    testMessages();
     testLock();
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
     return g_failures == 0 ? 0 : 1;
