@@ -63,7 +63,16 @@ What the build generates from the MIB (namespace = module name in snake_case, e.
 | table | rows by index: `data.appSensors.appSensorTable[1]` | `remote.appSensors.appSensorTable[1]`, `.read()` |
 | column | member of the row: `[1].appSensorName` | `[1].appSensorName.get()` / `.set(v)` |
 | named numbers | `enum class AppSensorMode { on, off }`, `toString()` | same |
-| notification | `sendAppLimitExceeded(agent, …)` | – |
+| notification | `sendAppLimitExceeded(agent, …)` | `notifications.onAppLimitExceeded(…)` |
+| the whole MIB | – | `remote.read()` → `Data`, `remote.send(data)` |
+
+**Which direction?** The MIB decides, per object, with `MAX-ACCESS`:
+
+| In the MIB | Information flows | Agent | Client |
+|---|---|---|---|
+| `read-only` (status, measurements) | agent → client, the client asks | writes it into `data` | `get()` only – `set()` does not exist (compile error) |
+| `read-write`, `read-create` (settings, commands) | client → agent | receives it: `onSet` (check), messages (react) | `get()`, `set()`, `send()` |
+| `NOTIFICATION-TYPE` (events) | agent → client, pushed | `send<Name>()` | `Notifications::on<Name>()` |
 
 Names are the **full MIB names**. SMI requires them to be unique in a module, so they never clash; C++ keywords get a
 trailing `_`.
@@ -168,8 +177,8 @@ data.appSensors.appLimit = 30;
 data.appSensors.appSensorTable[1] = {"cpu", 20, mib::AppSensorMode::on};
 
 mib::DataAgent adapter(agent, data);                    // publishes every object of the MIB
-adapter.onSet([&](const std::string& object, const snmpwrap::Oid& index) {
-    std::cout << object << " was changed by a manager\n";
+adapter.onAppSensors([](const mib::Data::AppSensorsGroup& settings) {    // a manager changed this subtree
+    std::cout << "new limit " << settings.appLimit << "\n";
 });
 
 while (!g_stop && agent.poll()) {                       // answers requests, returns at least once per second
@@ -195,6 +204,15 @@ remote.appSensors.appLimit.set(35);
 for (const auto& [index, row] : remote.appSensors.appSensorTable.read())
     std::cout << index.appSensorIndex << ": " << row.appSensorName << " " << row.appSensorTemperature << " C\n";
 remote.appSensors.appSensorTable[3].appSensorMode.set(mib::AppSensorMode::on);
+
+mib::Data::AppSensorsGroup settings;                    // a whole subtree as one message
+settings.appLimit = 25;
+remote.appSensors.send(settings);
+
+snmpwrap::NotificationReceiver receiver("udp:0.0.0.0:1162");   // events from the agent
+mib::Notifications notifications(receiver);
+notifications.onAppLimitExceeded([](const mib::AppLimitExceeded& n) { std::cout << n.appSensorName << " too warm\n"; });
+receiver.poll();
 ```
 
 **5. Run it** – three terminals, or `scripts/demo.sh` which does all of it:
@@ -242,22 +260,46 @@ Tables are `std::map`s ordered like SNMP orders the rows. A table with a composi
 
 ### Reacting to changes
 
+A manager can change a single value, several values, a table row or a whole subtree in one request. The adapter reports
+it on every level; pick the one that matches what belongs together in your MIB:
+
 | Hook | Called | Use it to |
 |---|---|---|
-| `adapter.onSet(f)` | after a manager wrote a value (MIB object name, row index or empty), the new value is already in `data` | react to a change; **throw `snmpwrap::SetError` to refuse it** – the old value comes back and the manager gets the error |
-| `adapter.onGet(f)` | before a manager reads a value | values computed on demand (counters, uptime, live readings): write them into `data` |
+| `adapter.onSet(f)` | while the request is written, per value: `f(mib::Object, index)` | **check** a value: throw `snmpwrap::SetError` to refuse the whole request (the old values come back) |
+| `adapter.onChanged(f)` | **after the commit**, per changed value: `f(mib::Object, index)` | react to single values |
+| `adapter.on<Table>Row(f)` | after the commit, per changed or created row: `f(index, row)` | a row is one message (e.g. one command) |
+| `adapter.on<Group>(f)` | after the commit, once if anything in the subtree changed: `f(const Data::<Group>&)` | a subtree is one message (e.g. a settings block) |
+| `adapter.on<Module>(f)` | after the commit, once if anything changed: `f(const Data&)` | the whole MIB |
+| `adapter.onGet(f)` | before a manager reads a value: `f(mib::Object, index)` | values computed on demand (counters, uptime, live readings) |
 
 ```cpp
-adapter.onSet([&](const std::string& object, const snmpwrap::Oid& index) {
-    if (object == "appLimit" && data.appSensors.appLimit < 10)          // an extra rule on top of the MIB
+adapter.onSet([&](mib::Object object, const snmpwrap::Oid&) {                       // check
+    if (object == mib::Object::appLimit && data.appSensors.appLimit < 10)
         throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10 is not allowed");
+});
+adapter.onAppSensors([](const mib::Data::AppSensorsGroup& settings) {               // subtree message
+    std::cout << "settings: limit " << settings.appLimit << "\n";
+});
+adapter.onAppSensorTableRow([](const mib::AppSensorEntryIndex& i, const mib::AppSensorEntry& row) {   // row message
+    std::cout << "sensor " << i.appSensorIndex << " " << mib::toString(row.appSensorMode) << "\n";
+});
+adapter.onChanged([](mib::Object object, const snmpwrap::Oid& index) {              // every single value
+    switch (object) {
+        case mib::Object::appName: /* ... */ break;
+        default: break;
+    }
 });
 ```
 
-Both hooks run in the agent loop with the adapter's mutex held: read and write `data` directly, never call
-`adapter.lock()` inside them. `onSet` runs per value; a request with several values may still fail later and be rolled
-back. For work that must not be undone (switching hardware, …) put an entry into a queue in the hook and handle it in
-your main loop after `poll()`. The destruction of a row cannot be refused.
+Rules:
+
+* `mib::Object` names every object of the MIB – a `switch` instead of string comparisons, so a typo is a compile error.
+* The message hooks run **once per request and only after it was committed**: a refused or rolled-back request
+  reports nothing, and they see all values of the request at once.
+* All hooks run in the agent loop with the adapter's mutex held: read and write `data` directly, never call
+  `adapter.lock()` inside them. Exceptions from the message hooks are ignored (the request is already committed).
+* Row creation through RowStatus is reported as the RowStatus object plus a row message; a destroyed row is reported as the
+  RowStatus object and in its subtree, but not as a row.
 
 ### Checking values you set yourself
 
@@ -291,9 +333,15 @@ It also finds values you forgot: an empty `appName` violates `SIZE (1..32)`.
 | `remote.appSensors.appSensorTable[1].appSensorMode.get()` / `.set(v)` | one cell |
 | `remote.appSensors.appSensorTable[1].read()` | all columns of one row (`AppSensorEntry`) |
 | `remote.appSensors.appSensorTable.read()` | the whole table, `std::map<Index, Entry>` |
+| `remote.read()` | **everything** in one walk, as the same `Data` structure the agent uses |
+| `remote.appSensors.send(msg)` | a subtree as one message: all its writable values in **one** request (all or nothing) |
+| `remote.appSensors.appSensorTable[1].send(row)` | a row as one message |
+| `remote.send(data)` | all writable values of the MIB in one request |
+| `remote.change().set(remote.a, 1).set(remote.t[2].c, 5).send()` | any selection of values in one request |
 | `table.create(index, values, activate)` / `table.destroy(index)` | RowStatus tables only |
 
-`session` is a `snmpwrap::Client`; it must outlive `remote`. Use one session per thread.
+`session` is a `snmpwrap::Client`; it must outlive `remote`. Use one session per thread. One request with several
+values is atomic at the agent: if one value is refused, none is written, and `ResponseError::index()` names the refused one.
 
 ### Connecting (v1, v2c, v3)
 
@@ -357,6 +405,25 @@ trapsess   -v3 -u trapuser -l authNoPriv -a SHA -A secret123 192.168.1.50
 ```
 
 Call it from the agent loop (not from another thread); it is dropped while the agent is not connected to snmpd.
+
+### Receiving them (client side)
+
+```cpp
+snmpwrap::NotificationReceiver receiver("udp:0.0.0.0:1162");    // where snmpd sends them (port 162 needs root)
+mib::Notifications notifications(receiver);                     // generated: typed handlers
+notifications.onAppLimitExceeded([](const mib::AppLimitExceeded& n) {
+    std::cout << n.appSensorName << " " << n.appSensorTemperature << " C, sensor " << n.appSensorEntryIndex.appSensorIndex
+              << " (from " << n.raw.source << ")\n";
+});
+notifications.onOther([](const snmpwrap::Notification& n) { /* notifications of other MIBs */ });
+
+while (running) receiver.poll();                                // or receiver.run() until receiver.stop()
+```
+
+In snmpd.conf: `trap2sink <address> public` (SNMPv2c), `trapsink` (SNMPv1, converted back automatically) or
+`informsink` (acknowledged by the receiver). Every notification has `raw` with sender, community, version and all varbinds.
+SNMPv3 notifications are not supported by the receiver. `snmpwrap::NotificationReceiver` alone works without a MIB
+(`onNotification(...)` with `trapOid` and varbinds).
 
 ---
 
@@ -473,6 +540,7 @@ are only known at run time, or a proxy to another process. The reference is in t
 | `snmpwrap/agent.hpp` | `Agent`, `AgentConfig` |
 | `snmpwrap/mib.hpp` | `Mib` (scalars, tables, RowStatus by OID), `Handler`, `SetTransaction` |
 | `snmpwrap/client.hpp` | `Client`, `SessionConfig` |
+| `snmpwrap/notification.hpp` | `NotificationReceiver`, `Notification` |
 | `snmpwrap/oid.hpp`, `value.hpp`, `index.hpp`, `error.hpp` | `Oid`, `Value`/`Type`/`VarBind`, index encoding, exceptions |
 | `snmpwrap/mib_model.hpp` | `MibModel` – reads MIB files (used by the generator and `client_cli -m`) |
 

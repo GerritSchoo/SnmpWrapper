@@ -11,7 +11,7 @@ my_app_mib::Data data;                                my_app_mib::Remote remote(
 data.appName = "my-app";                              remote.appSensors.appLimit.set(35);
 data.appSensors.appSensorTable[1].appSensorName = "cpu";   auto name = remote.appSensors.appSensorTable[1].appSensorName.get();
 my_app_mib::DataAgent adapter(agent, data);
-adapter.onSet([&](const std::string& object, const snmpwrap::Oid& index) { /* ein Manager hat etwas geändert */ });
+adapter.onAppSensors([](const my_app_mib::Data::AppSensorsGroup& msg) { /* ein Manager hat diesen Teilbaum geändert */ });
 while (agent.poll()) { ... }
 ```
 
@@ -25,12 +25,18 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
                                                                     └── Client: Remote             (direkt per SNMP)
 ```
 
+* **Richtung:** Was `read-only` ist, fließt vom Agent zum Client (Status), was `read-write` ist, vom Client zum Agent
+  (Einstellungen, Befehle); Notifications schickt der Agent aktiv an den Client.
 * **Agent:** ein AgentX-Subagent. `snmpd` übernimmt Protokollversionen, Communities, SNMPv3-Benutzer und Zugriffsrechte;
   dein Programm liefert nur die Werte. SET-Anfragen werden vor dem Schreiben gegen die MIB geprüft (Typ, Bereich, Länge,
-  Enum-Werte); `onSet` meldet Änderungen und darf sie ablehnen, `onGet` aktualisiert Werte vor dem Lesen.
-* **Client:** `remote.gruppe.objekt.get()` / `.set(v)`, Tabellen per `[index]` oder `.read()`. Werte werden vor dem
-  Senden gegen die MIB geprüft.
-* **Notifications:** pro `NOTIFICATION-TYPE` eine typisierte Funktion (`sendAppLimitExceeded(agent, …)`).
+  Enum-Werte). Was ein Manager geändert hat, meldet der Adapter **nach dem Commit, einmal pro Anfrage** – pro Wert
+  (`onChanged`), pro Tabellenzeile (`on<Tabelle>Row`) oder pro Teilbaum (`on<Gruppe>`); `onSet` prüft vorher und darf
+  ablehnen, `onGet` aktualisiert Werte vor dem Lesen. Objekte werden über `enum class Object` unterschieden (`switch`).
+* **Client:** `remote.gruppe.objekt.get()` / `.set(v)`, Tabellen per `[index]`, alles auf einmal mit `remote.read()` (als
+  `Data`). Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
+  beliebige Werte in einer Anfrage: `remote.change().set(…).set(…).send()`. Werte werden vor dem Senden gegen die MIB geprüft.
+* **Notifications:** Der Agent sendet sie typisiert (`sendAppLimitExceeded(agent, …)`), der Client empfängt sie typisiert
+  (`snmpwrap::NotificationReceiver` + `my_app_mib::Notifications`, `onAppLimitExceeded(…)`).
 
 ## Bauen (Linux / WSL)
 
