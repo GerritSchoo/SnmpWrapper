@@ -17,6 +17,8 @@
 ### Added
 - `Value::fits(Type)` – whether a value can stand for an object of a declared type (OctetString for Bits).
 - `Mib::onUndo()` – start of the rollback of a SET request.
+- Generator: `operator<<` for `Data`, every nested group, table, row, row index and enum – `std::cout << data;` prints
+  every value in MIB order, groups and rows indented (enums as `label(number)`, texts quoted, bytes in hex, BITS by name).
 - `NotificationReceiver::acceptCommunities()` – drop notifications with other communities (and do not acknowledge
   their informs). Without it, every notification is accepted as before.
 

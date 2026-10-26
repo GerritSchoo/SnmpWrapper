@@ -98,6 +98,8 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
   **SHA-2 und AES192/256** brauchen ein Net-SNMP mit OpenSSL bzw. `--enable-blumenthal-aes`, sonst meldet der Client einen Fehler.
 * SNMP kennt keine Gleitkommazahlen: `Integer32` mit vereinbarter Skalierung (z. B. Zehntelgrad) oder Text verwenden.
 * Lokale Zuweisungen an `Data` werden nicht automatisch geprüft – dafür gibt es `data.validate()`; SNMP-SET wird immer geprüft.
+* Ausgabe zum Loggen/Debuggen: `std::cout << data;` schreibt alle Werte eingerückt wie die MIB; genauso für Teile
+  (`data.gruppe`, `data.gruppe.tabelle`, eine Zeile, ein Index, ein Enum).
 * `Data` hält alle Tabellenzeilen im Speicher.
 * Nur AgentX-Subagent, ein Agent pro Prozess, kein Windows. Den Reconnect nach einem snmpd-Neustart übernimmt Net-SNMP.
 * Ohne MIB gibt es die Kern-API (`Mib`, `Handler`, `Client` mit OIDs) – kurz beschrieben im Anhang des Guides.

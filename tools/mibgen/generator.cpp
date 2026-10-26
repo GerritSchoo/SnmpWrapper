@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdio>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 
@@ -566,6 +567,8 @@ void emitTableContainer(W& w, const Table& t) {
         w("    " + t.entryType + "& operator[](" + ct + " " + ident(t.index[0]->name) + ") { return (*this)[" + t.indexType + "{" + ident(t.index[0]->name) + "}]; }");
     }
     w("};");
+    w("/// @brief Writes every row: `[index]`, then its columns indented. @return @p os.");
+    w("std::ostream& operator<<(std::ostream& os, const " + tableType(t) + "& v);");
     w();
 }
 
@@ -600,6 +603,75 @@ void emitValidate(W& w, const Module& mod, const Group& g, const std::string& pa
         w("    }");
     }
     for (const Group& c : g.children) emitValidate(w, mod, c, path + c.member + ".", label + c.mibName + ".");
+}
+
+/// Statement that writes the value `e` of object `n` to `os` (operator<<): enums by label, texts quoted, raw bytes in hex.
+std::string printStmt(const MibNode& n, const std::string& e) {
+    if (isRowStatus(n)) return "printRowStatus(os, " + e + ");";
+    switch (n.type) {
+        case Type::Integer:  // enums have their own operator<<
+        case Type::Gauge32:
+        case Type::Counter32:
+        case Type::TimeTicks:
+        case Type::Counter64: return "os << " + e + ";";
+        case Type::OctetString: return "printText(os, " + e + ");";
+        case Type::Opaque: return "printHex(os, " + e + ");";
+        case Type::Bits: {
+            std::string names;
+            for (const MibEnum& b : n.enums) names += (names.empty() ? "" : ", ") + std::string("{") + std::to_string(b.value) + ", \"" + b.label + "\"}";
+            return "printBits(os, " + e + ", {" + names + "});";
+        }
+        case Type::ObjectId: return "os << " + e + ".str();";
+        case Type::IpAddress: return "printIp(os, " + e + ");";
+        default: throw Error("unsupported type");
+    }
+}
+
+/// Qualified C++ type and group of every nested group struct of Data, children before their parents.
+void collectGroupTypes(const Group& g, const std::string& qual, std::vector<std::pair<std::string, const Group*>>& out) {
+    for (const Group& c : g.children) collectGroupTypes(c, qual + "::" + c.type, out);
+    out.emplace_back(qual, &g);
+}
+
+/// Smallest OID of a scalar or table in a group's subtree (to print the members in MIB order).
+Oid firstOid(const Module& mod, const Group& g) {
+    std::optional<Oid> best;
+    auto take = [&best](const Oid& o) {
+        if (!best || o < *best) best = o;
+    };
+    for (const MibNode* n : g.scalars) take(n->oid);
+    for (std::size_t i : g.tables) take(mod.tables[i].table->oid);
+    for (const Group& c : g.children) take(firstOid(mod, c));
+    return best.value_or(Oid{});
+}
+
+/// Body of print(os, group, depth): one line per scalar, a header line per nested group and table, contents indented;
+/// members in MIB (OID) order like a walk.
+void emitPrintGroup(W& w, const Module& mod, const Group& g, const std::string& qual) {
+    std::vector<std::pair<Oid, std::vector<std::string>>> parts;
+    for (const Group& c : g.children)
+        parts.push_back({firstOid(mod, c),
+                         {"    indent(os, depth);", "    os << \"" + c.mibName + "\\n\";", "    print(os, v." + c.member + ", depth + 1);"}});
+    for (const MibNode* n : g.scalars)
+        parts.push_back({n->oid,
+                         {"    indent(os, depth);", "    os << \"" + n->name + " = \";", "    " + printStmt(*n, "v." + memberName(n->name)),
+                          "    os << '\\n';"}});
+    for (std::size_t i : g.tables) {
+        const Table& t = mod.tables[i];
+        const std::string tm = "v." + memberName(t.table->name);
+        parts.push_back({t.table->oid,
+                         {"    indent(os, depth);",
+                          "    os << \"" + t.table->name + " (\" << " + tm + ".size() << (" + tm + ".size() == 1 ? \" row)\\n\" : \" rows)\\n\");",
+                          "    print(os, " + tm + ", depth + 1);"}});
+    }
+    std::sort(parts.begin(), parts.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    w("void print(std::ostream& os, const " + qual + "& v, int depth) {");
+    for (const auto& part : parts)
+        for (const std::string& line : part.second) w(line);
+    if (parts.empty()) w("    (void)os, (void)v, (void)depth;");
+    w("}");
+    w();
 }
 
 /// Pending flag of a group in DataAgent::Impl ("attitude." -> pend_attitude, root -> pendRoot).
@@ -1109,6 +1181,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w("#include <array>");
     w("#include <cstdint>");
     w("#include <functional>");
+    w("#include <iosfwd>");
     w("#include <map>");
     w("#include <memory>");
     w("#include <mutex>");
@@ -1147,6 +1220,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("};");
         w("/// @brief MIB label of a value. @param[in] v The value. @return E.g. \"" + n->enums.front().label + "\", or \"?\".");
         w("const char* toString(" + name + " v) noexcept;");
+        w("/// @brief Writes the label and the number, e.g. \"" + n->enums.front().label + "(" + std::to_string(n->enums.front().value) + ")\". @return @p os.");
+        w("std::ostream& operator<<(std::ostream& os, " + name + " v);");
         w();
     }
 
@@ -1174,12 +1249,16 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    /// @brief Inequality.");
         w("    friend bool operator!=(const " + t.indexType + "& a, const " + t.indexType + "& b) { return !(a == b); }");
         w("};");
+        w("/// @brief Writes the index values, e.g. `3, \"port\"`. @return @p os.");
+        w("std::ostream& operator<<(std::ostream& os, const " + t.indexType + "& v);");
         w();
         w("/// @brief All readable columns of one row of " + t.table->name + " (as read by Client).");
         w("struct " + t.entryType + " {");
         for (const MibNode* c : t.columns) w("    " + cppType(*c) + " " + ident(c->name) + "{};  ///< " + c->name);
         if (t.rowStatus) w("    snmpwrap::RowStatus " + ident(t.rowStatus->name) + "{};  ///< " + t.rowStatus->name);
         w("};");
+        w("/// @brief Writes every column, one `name = value` line each. @return @p os.");
+        w("std::ostream& operator<<(std::ostream& os, const " + t.entryType + "& v);");
         w();
         if (t.rowStatus) {
             w("/// @brief Column values for creating a row of " + t.table->name + "; unset = not supplied.");
@@ -1396,6 +1475,17 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    std::vector<std::string> validate() const;");
         w("};");
         w();
+        w("/// @name Text output: every value, one `name = value` line each; nested groups and table rows indented");
+        w("/// (enums by label, texts in quotes, other bytes in hex). For logging and debugging: `std::cout << data;`");
+        w("/// @{");
+        {
+            std::vector<std::pair<std::string, const Group*>> groups;
+            collectGroupTypes(mod.data, "Data", groups);
+            for (const auto& [qual, g] : groups)
+                w("std::ostream& operator<<(std::ostream& os, const " + qual + "& v);  ///< " + (g == &mod.data ? "everything" : "group " + g->mibName));
+        }
+        w("/// @}");
+        w();
         w("/**");
         w(" * @brief Serves a Data structure through an snmpwrap::Agent.");
         w(" *");
@@ -1577,6 +1667,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     w("// DO NOT EDIT - changes are lost when the MIB is regenerated.");
     w("#include \"" + base + ".hpp\"");
     w();
+    w("#include <ostream>");
     w("#include <set>");
     w("#include <utility>");
     w();
@@ -1617,6 +1708,83 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w();
     }
     for (const MibNode* n : mod.checked) genCheck(w, *n);
+    w("// --- text output (operator<<)");
+    w();
+    w("[[maybe_unused]] void indent(std::ostream& os, int depth) {");
+    w("    for (int i = 0; i < depth; ++i) os << \"  \";");
+    w("}");
+    w();
+    w("/// Bytes as hex: 0x0a1b.");
+    w("[[maybe_unused]] void printHex(std::ostream& os, const std::string& s) {");
+    w("    static const char digits[] = \"0123456789abcdef\";");
+    w("    os << \"0x\";");
+    w("    for (unsigned char c : s) os << digits[c >> 4] << digits[c & 0x0f];");
+    w("}");
+    w();
+    w("/// Text in quotes (UTF-8 kept, \\\" and \\\\ escaped); in hex if it holds control characters.");
+    w("[[maybe_unused]] void printText(std::ostream& os, const std::string& s) {");
+    w("    for (unsigned char c : s)");
+    w("        if (c < 0x20 || c == 0x7f) return printHex(os, s);");
+    w("    os << '\"';");
+    w("    for (char c : s) {");
+    w("        if (c == '\"' || c == '\\\\') os << '\\\\';");
+    w("        os << c;");
+    w("    }");
+    w("    os << '\"';");
+    w("}");
+    w();
+    w("/// BITS: the names of the set bits (numbers for unnamed ones), e.g. {alarm, 9}.");
+    w("[[maybe_unused]] void printBits(std::ostream& os, const std::string& s, std::initializer_list<std::pair<int, const char*>> names) {");
+    w("    os << '{';");
+    w("    bool first = true;");
+    w("    for (std::size_t bit = 0; bit < s.size() * 8; ++bit) {");
+    w("        if (!(static_cast<unsigned char>(s[bit / 8]) & (0x80u >> (bit % 8)))) continue;");
+    w("        os << (first ? \"\" : \", \");");
+    w("        first = false;");
+    w("        const char* name = nullptr;");
+    w("        for (const auto& n : names)");
+    w("            if (n.first == static_cast<int>(bit)) name = n.second;");
+    w("        if (name) os << name;");
+    w("        else os << bit;");
+    w("    }");
+    w("    os << '}';");
+    w("}");
+    w();
+    w("[[maybe_unused]] void printIp(std::ostream& os, const std::array<std::uint8_t, 4>& a) {");
+    w("    os << unsigned(a[0]) << '.' << unsigned(a[1]) << '.' << unsigned(a[2]) << '.' << unsigned(a[3]);");
+    w("}");
+    w();
+    w("[[maybe_unused]] void printRowStatus(std::ostream& os, snmpwrap::RowStatus s) {");
+    w("    switch (s) {");
+    w("        case snmpwrap::RowStatus::Active: os << \"active\"; break;");
+    w("        case snmpwrap::RowStatus::NotInService: os << \"notInService\"; break;");
+    w("        case snmpwrap::RowStatus::NotReady: os << \"notReady\"; break;");
+    w("        case snmpwrap::RowStatus::CreateAndGo: os << \"createAndGo\"; break;");
+    w("        case snmpwrap::RowStatus::CreateAndWait: os << \"createAndWait\"; break;");
+    w("        case snmpwrap::RowStatus::Destroy: os << \"destroy\"; break;");
+    w("        default: os << \"?\"; break;");
+    w("    }");
+    w("    os << '(' << static_cast<int>(s) << ')';");
+    w("}");
+    w();
+    for (const Table& t : mod.tables) {
+        w("void print(std::ostream& os, const " + t.entryType + "& v, int depth) {");
+        for (const MibNode* c : t.columns) {
+            w("    indent(os, depth);");
+            w("    os << \"" + c->name + " = \";");
+            w("    " + printStmt(*c, "v." + ident(c->name)));
+            w("    os << '\\n';");
+        }
+        if (t.rowStatus) {
+            w("    indent(os, depth);");
+            w("    os << \"" + t.rowStatus->name + " = \";");
+            w("    " + printStmt(*t.rowStatus, "v." + ident(t.rowStatus->name)));
+            w("    os << '\\n';");
+        }
+        if (t.columns.empty() && !t.rowStatus) w("    (void)os, (void)v, (void)depth;");
+        w("}");
+        w();
+    }
     w("}  // namespace");
     w();
 
@@ -1942,6 +2110,62 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    if (other_) other_(n);");
         w("}");
         w();
+    }
+
+    // text output
+    for (const auto& [name, n] : mod.enums) {
+        w("std::ostream& operator<<(std::ostream& os, " + name + " v) {");
+        w("    return os << toString(v) << '(' << static_cast<std::int32_t>(v) << ')';");
+        w("}");
+        w();
+    }
+    for (const Table& t : mod.tables) {
+        w("std::ostream& operator<<(std::ostream& os, const " + t.indexType + "& v) {");
+        for (std::size_t i = 0; i < t.index.size(); ++i) {
+            if (i) w("    os << \", \";");
+            w("    " + printStmt(*t.index[i], "v." + ident(t.index[i]->name)));
+        }
+        w("    return os;");
+        w("}");
+        w();
+        w("std::ostream& operator<<(std::ostream& os, const " + t.entryType + "& v) {");
+        w("    print(os, v, 0);");
+        w("    return os;");
+        w("}");
+        w();
+    }
+    if (mod.hasData) {
+        w("namespace {");
+        w();
+        for (const Table& t : mod.tables) {
+            w("void print(std::ostream& os, const " + tableType(t) + "& v, int depth) {");
+            w("    for (const auto& [index, row] : v) {");
+            w("        indent(os, depth);");
+            w("        os << '[' << index << \"]\\n\";");
+            w("        print(os, row, depth + 1);");
+            w("    }");
+            w("}");
+            w();
+        }
+        std::vector<std::pair<std::string, const Group*>> groups;
+        collectGroupTypes(mod.data, "Data", groups);
+        for (const auto& [qual, g] : groups) emitPrintGroup(w, mod, *g, qual);
+        w("}  // namespace");
+        w();
+        for (const Table& t : mod.tables) {
+            w("std::ostream& operator<<(std::ostream& os, const " + tableType(t) + "& v) {");
+            w("    print(os, v, 0);");
+            w("    return os;");
+            w("}");
+            w();
+        }
+        for (const auto& [qual, g] : groups) {
+            w("std::ostream& operator<<(std::ostream& os, const " + qual + "& v) {");
+            w("    print(os, v, 0);");
+            w("    return os;");
+            w("}");
+            w();
+        }
     }
 
     // Data model

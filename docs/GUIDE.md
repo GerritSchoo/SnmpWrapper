@@ -313,6 +313,36 @@ for (const std::string& problem : data.validate())
 
 It also finds values you forgot: an empty `appName` violates `SIZE (1..32)`.
 
+### Printing the data
+
+`operator<<` writes the whole structure or any part of it – for logging and debugging. Values come in MIB order,
+one `name = value` line each, nested groups and table rows indented:
+
+```cpp
+std::cout << data;                                    // everything
+std::cout << data.appSensors;                         // one group
+std::cout << data.appSensors.appSensorTable;          // one table: [index], then the columns
+std::cout << data.appSensors.appSensorTable[1];       // one row
+std::cout << index << " " << mib::AppSensorMode::on;  // a row index ("1"), an enum ("on(1)")
+```
+
+```
+appName = "my-app"
+appSensors
+  appLimit = 30
+  appSensorTable (2 rows)
+    [1]
+      appSensorName = "cpu"
+      appSensorTemperature = 20
+      appSensorMode = on(1)
+    [2]
+      ...
+```
+
+Enums show label and number, texts are quoted (UTF-8 is kept), strings with control characters and Opaque values are
+written in hex (`0x0a1b`), BITS as the names of the set bits (`{red, blue}`), RowStatus as `active(1)` etc. The row
+types and indexes have `operator<<` as well, so the maps returned by `Client` print the same way.
+
 ### Limits
 
 * SNMP has no floating point type: use `Integer32` with an agreed scale (e.g. tenths of a degree) or a string.

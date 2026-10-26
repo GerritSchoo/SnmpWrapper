@@ -4,6 +4,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -531,6 +532,91 @@ void testLock() {
     CHECK(s.mib.get(scalar(m::oids::boatName)) == Value::string("locked"));
 }
 
+template <typename T>
+std::string text(const T& v) {
+    std::ostringstream os;
+    os << v;
+    return os.str();
+}
+
+void testTextOutput() {
+    m::Data d = validData();
+    d.attitude.extendedPitchTable[{3, "port"}] = {-5, RowStatus::Active};
+
+    // everything, in MIB order, nested groups and rows indented
+    CHECK(text(d) ==
+          "boatName = \"aurora\"\n"
+          "attitude\n"
+          "  extendedRollTable (2 rows)\n"
+          "    [1]\n"
+          "      extendedRollValue = 124\n"
+          "      extendedRollSensor = \"gyro-1\"\n"
+          "      extendedRollCounter = 7\n"
+          "      extendedRollTimepoint = 1000\n"
+          "    [2]\n"
+          "      extendedRollValue = -30\n"
+          "      extendedRollSensor = \"gyro-2\"\n"
+          "      extendedRollCounter = 0\n"
+          "      extendedRollTimepoint = 0\n"
+          "  extendedPitchTable (1 row)\n"
+          "    [3, \"port\"]\n"
+          "      extendedPitchValue = -5\n"
+          "      extendedPitchStatus = active(1)\n"
+          "navigation\n"
+          "  navigationMode = manual(1)\n"
+          "  extendedCourseTable (1 row)\n"
+          "    [1]\n"
+          "      extendedCourseValue = 900\n");
+
+    // parts: a group, a table, a row, an index, an enum
+    CHECK(text(d.navigation) ==
+          "navigationMode = manual(1)\n"
+          "extendedCourseTable (1 row)\n"
+          "  [1]\n"
+          "    extendedCourseValue = 900\n");
+    CHECK(text(d.attitude.extendedPitchTable) ==
+          "[3, \"port\"]\n"
+          "  extendedPitchValue = -5\n"
+          "  extendedPitchStatus = active(1)\n");
+    CHECK(text(d.attitude.extendedRollTable[2]) ==
+          "extendedRollValue = -30\n"
+          "extendedRollSensor = \"gyro-2\"\n"
+          "extendedRollCounter = 0\n"
+          "extendedRollTimepoint = 0\n");
+    CHECK(text(m::ExtendedPitchEntryIndex{3, "port"}) == "3, \"port\"");
+    CHECK(text(m::NavigationMode::automatic) == "automatic(2)");
+    CHECK(text(static_cast<m::NavigationMode>(7)) == "?(7)");
+    CHECK(text(m::Data{}.navigation.extendedCourseTable).empty());
+
+    // value kinds: escaped text, bytes that are no text, BITS by name, Counter64, IpAddress in an index
+    namespace t = snmpwrapper_test_mib;
+    t::Data s;
+    s.swtScalars.swtName = "say \"hi\"\\ \xc3\xa4";  // UTF-8 stays text
+    s.swtScalars.swtFlags = std::string("\xa0\x01", 2);  // bits 0, 2 and the unnamed bit 15
+    s.swtScalars.swtBigCounter = 4294967297u;
+    s.swtTable[1] = {"bin\x01", 5, t::SwtEntryStatus::up};
+    s.swtConnTable[{{10, 0, 0, 1}, 80, "web"}].swtConnState = t::SwtConnState::listen;
+    CHECK(text(s) ==
+          "swtScalars\n"
+          "  swtName = \"say \\\"hi\\\"\\\\ \xc3\xa4\"\n"
+          "  swtCounter = 0\n"
+          "  swtGauge = 0\n"
+          "  swtLimit = 0\n"
+          "  swtUptime = 0\n"
+          "  swtBigCounter = 4294967297\n"
+          "  swtFlags = {red, blue, 15}\n"
+          "swtTable (1 row)\n"
+          "  [1]\n"
+          "    swtEntryName = 0x62696e01\n"
+          "    swtEntryValue = 5\n"
+          "    swtEntryStatus = up(2)\n"
+          "swtRowTable (0 rows)\n"
+          "swtConnTable (1 row)\n"
+          "  [10.0.0.1, 80, \"web\"]\n"
+          "    swtConnState = listen(2)\n"
+          "swtBigTable (0 rows)\n");
+}
+
 }  // namespace
 
 int main() {
@@ -549,6 +635,7 @@ int main() {
     testMessages();
     testMockableInterfaces();
     testLock();
+    testTextOutput();
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
     return g_failures == 0 ? 0 : 1;
 }
