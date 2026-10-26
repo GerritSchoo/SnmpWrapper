@@ -136,6 +136,12 @@ int main(int argc, char** argv) {
         check(remote.swtRowTable.read().count({61}) == 0, "destroy removes the row");
 
         if (receiver) {
+            // snmpd sends with community "public": everything queued so far and sent in the next 4 s is dropped
+            receiver->acceptCommunities({"not-public"});
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+            while (std::chrono::steady_clock::now() < until) receiver->poll(std::chrono::milliseconds(100));
+            check(v2 == 0 && v1 == 0 && informs == 0, "notification: other communities dropped (acceptCommunities)");
+            receiver->acceptCommunities({"public"});
             for (int i = 0; i < 100 && (v2 == 0 || v1 == 0 || informs == 0); ++i) receiver->poll(std::chrono::milliseconds(100));
             check(v2 > 0, "notification: v2c trap swtAlarm received, typed");
             check(v1 > 0, "notification: v1 trap converted to swtAlarm");

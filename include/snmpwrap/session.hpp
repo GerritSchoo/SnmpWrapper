@@ -10,6 +10,7 @@
 #include <functional>
 #include <vector>
 
+#include "snmpwrap/error.hpp"
 #include "snmpwrap/oid.hpp"
 #include "snmpwrap/value.hpp"
 
@@ -50,7 +51,12 @@ public:
     virtual void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) = 0;
 
     /// @brief GET of one instance. @param[in] oid Instance OID. @return The varbind.
-    VarBind get(const Oid& oid) { return get(std::vector<Oid>{oid}).front(); }
+    /// @throws Error if the implementation returns no varbind.
+    VarBind get(const Oid& oid) {
+        std::vector<VarBind> r = get(std::vector<Oid>{oid});
+        if (r.empty()) throw Error("GET " + oid.str() + ": no varbind in the answer");
+        return std::move(r.front());
+    }
     /// @brief SET of one instance. @param[in] oid Instance OID. @param[in] value New value.
     void set(const Oid& oid, const Value& value) { set(std::vector<VarBind>{{oid, value}}); }
     /// @brief Walks a subtree and collects it. @param[in] root Subtree. @return All varbinds in OID order.

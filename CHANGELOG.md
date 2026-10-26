@@ -9,10 +9,16 @@
 - `DataAgent`: rolling back a SET request restores the old values without calling `onSet` again. Before, a hook that
   refused the old value left the new value in `Data` although the manager got an error, and a rolled-back row creation
   was reported to `onSet` as a destroy.
+- `DataAgent`: columns supplied by a rolled-back request no longer count for the completeness of a RowStatus row
+  (an incomplete row could be activated).
+- `Client` / `Session`: an answer without varbinds, or with a different number than requested (GET, GETNEXT, SET),
+  throws `Error` instead of leading to undefined behaviour.
 
 ### Added
 - `Value::fits(Type)` – whether a value can stand for an object of a declared type (OctetString for Bits).
 - `Mib::onUndo()` – start of the rollback of a SET request.
+- `NotificationReceiver::acceptCommunities()` – drop notifications with other communities (and do not acknowledge
+  their informs). Without it, every notification is accepted as before.
 
 ## 0.2.0
 

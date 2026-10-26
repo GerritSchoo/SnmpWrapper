@@ -727,6 +727,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
         if (t.rowStatus) {
             w("    // columns supplied for rows created by a manager (rows added by the application count as complete)");
             w("    std::map<" + t.indexType + ", std::set<std::string>> " + filled + ";");
+            w("    std::vector<std::pair<" + t.indexType + ", std::string>> " + filled + "New;  // added by this request (rollback)");
         }
         for (const MibNode* c : t.columns) {
             const std::string f = ident(c->name), F = upperFirst(c->name);
@@ -753,7 +754,8 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
                 w("            throw;");
                 w("        }");
                 if (t.rowStatus) {
-                    w("        if (const auto it = " + filled + ".find(index); it != " + filled + ".end()) it->second.insert(\"" + c->name + "\");");
+                    w("        if (const auto it = " + filled + ".find(index); it != " + filled + ".end() && it->second.insert(\"" + c->name + "\").second)");
+                    w("            " + filled + "New.emplace_back(index, \"" + c->name + "\");");
                 }
                 w("        changes.emplace_back(Object::" + f + ", index.toOid());");
                 w("        rows_" + memberName(t.table->name) + ".insert(index);");
@@ -1976,6 +1978,12 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    void undoStart() noexcept {");
         w("        std::lock_guard<std::mutex> l(mu);");
         w("        rollingBack = true;");
+        for (const Table& t : mod.tables) {  // columns the request supplied count as missing again
+            if (!t.rowStatus) continue;
+            const std::string filled = "filled_" + memberName(t.table->name);
+            w("        for (const auto& [index, column] : " + filled + "New)");
+            w("            if (const auto it = " + filled + ".find(index); it != " + filled + ".end()) it->second.erase(column);");
+        }
         w("    }");
         w("    void changed(Object object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
         w("        if (hook) hook(object, index);");
@@ -2026,6 +2034,8 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
                 w("            if (" + g.pend + " && " + g.var + ") quietly([&] { " + g.var + "(" + g.access + "); });");
             w("        }");
             w("        rollingBack = false;");
+            for (const Table& t : mod.tables)
+                if (t.rowStatus) w("        filled_" + memberName(t.table->name) + "New.clear();");
             w("        changes.clear();");
             for (const MsgTable& t : tables) w("        " + t.rows + ".clear();");
             for (const MsgGroup& g : groups) w("        " + g.pend + " = false;");

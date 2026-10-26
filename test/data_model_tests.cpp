@@ -340,6 +340,18 @@ void testRowCompleteness() {
     CHECK(s.data.attitude.extendedPitchTable.at(m::ExtendedPitchEntryIndex{5, "aft"}).extendedPitchStatus == RowStatus::NotReady);
     CHECK(failsWith(trySet(s.mib, {{status, Value::integer(1)}}), ErrorStatus::InconsistentValue, 0));  // not active yet
 
+    // the column supplied by a rolled-back request does not count (a later row of the request is refused)
+    const Oid other = m::ExtendedPitchEntryIndex{9, "x"}.toOid();
+    s.adapter.onSet([&](m::Object object, const Oid& index) {
+        if (object == m::Object::extendedPitchStatus && index == other) throw SetError(ErrorStatus::InconsistentValue, "no");
+    });
+    CHECK(trySet(s.mib, {{value, Value::integer(12)},
+                         {cell(m::oids::extendedPitchValue, other), Value::integer(1)},
+                         {cell(m::oids::extendedPitchStatus, other), Value::integer(4)}}));
+    s.adapter.onSet(nullptr);
+    CHECK(s.data.attitude.extendedPitchTable.at(m::ExtendedPitchEntryIndex{5, "aft"}).extendedPitchStatus == RowStatus::NotReady);
+    CHECK(failsWith(trySet(s.mib, {{status, Value::integer(1)}}), ErrorStatus::InconsistentValue, 0));  // still incomplete
+
     // supplying the column completes it (notReady -> notInService), then it can be activated
     CHECK(!trySet(s.mib, {{value, Value::integer(12)}}));
     CHECK(s.data.attitude.extendedPitchTable.at(m::ExtendedPitchEntryIndex{5, "aft"}).extendedPitchStatus == RowStatus::NotInService);
@@ -422,9 +434,11 @@ class MockSession : public Session {
 public:
     std::map<Oid, Value> values;
     std::vector<std::vector<VarBind>> sets;
+    bool answerNothing = false;  // a broken implementation / agent: no varbinds at all
 
     std::vector<VarBind> get(const std::vector<Oid>& oids) override {
         std::vector<VarBind> out;
+        if (answerNothing) return out;
         for (const Oid& o : oids) out.push_back({o, values.count(o) ? values.at(o) : Value::exception(Type::NoSuchInstance)});
         return out;
     }
@@ -472,6 +486,17 @@ void testMockableInterfaces() {
     CHECK(session.sets.back()[0].oid == cell(m::oids::extendedRollValue, m::ExtendedRollEntryIndex{3}.toOid()));
     const m::Data snapshot = remote.read();  // walk through the mock
     CHECK(snapshot.boatName == "mocked" && snapshot.attitude.extendedRollTable.at(m::ExtendedRollEntryIndex{3}).extendedRollValue == -12);
+
+    // an empty answer is an Error, not undefined behaviour
+    session.answerNothing = true;
+    bool empty = false;
+    try {
+        (void)remote.boatName.get();
+    } catch (const Error& e) {
+        empty = std::string(e.what()).find("no varbind") != std::string::npos;
+    }
+    CHECK(empty);
+    session.answerNothing = false;
 
     // sending notifications through a mocked sender
     namespace t = snmpwrapper_test_mib;

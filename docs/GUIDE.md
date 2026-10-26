@@ -410,6 +410,7 @@ Call it from the agent loop (not from another thread); it is dropped while the a
 
 ```cpp
 snmpwrap::NotificationReceiver receiver("udp:0.0.0.0:1162");    // where snmpd sends them (port 162 needs root)
+receiver.acceptCommunities({"public"});                         // the community of trap2sink / informsink
 mib::Notifications notifications(receiver);                     // generated: typed handlers
 notifications.onAppLimitExceeded([](const mib::AppLimitExceeded& n) {
     std::cout << n.appSensorName << " " << n.appSensorTemperature << " C, sensor " << n.appSensorEntryIndex.appSensorIndex
@@ -422,6 +423,8 @@ while (running) receiver.poll();                                // or receiver.r
 
 In snmpd.conf: `trap2sink <address> public` (SNMPv2c), `trapsink` (SNMPv1, converted back automatically) or
 `informsink` (acknowledged by the receiver). Every notification has `raw` with sender, community, version and all varbinds.
+Without `acceptCommunities(...)` the receiver takes notifications from anyone who can reach its address; with it, others
+are dropped (and not acknowledged).
 SNMPv3 notifications are not supported by the receiver. `snmpwrap::NotificationReceiver` alone works without a MIB
 (`onNotification(...)` with `trapOid` and varbinds).
 

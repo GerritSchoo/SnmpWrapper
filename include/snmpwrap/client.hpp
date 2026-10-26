@@ -122,7 +122,7 @@ public:
      * @brief GET of several instances in one request.
      * @param[in] oids Instance OIDs.
      * @return One varbind per OID, in the same order.
-     * @throws TransportError, ResponseError
+     * @throws TransportError, ResponseError; Error if the agent answers with a different number of varbinds.
      */
     std::vector<VarBind> get(const std::vector<Oid>& oids) override;
 

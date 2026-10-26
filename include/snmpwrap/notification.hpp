@@ -58,9 +58,12 @@ public:
  * @code
  * NotificationReceiver receiver("udp:0.0.0.0:1162");     // port 162 needs root
  * receiver.onNotification([](const Notification& n) { std::cout << n.trapOid.str() << "\n"; });
+ * receiver.acceptCommunities({"public"});                 // drop everything else
  * while (running) receiver.poll();                         // or receiver.run() until stop()
  * @endcode
  *
+ * @warning Without acceptCommunities() every v1 / v2c notification reaches the handlers (and every inform is
+ *          acknowledged), whoever sends it: anyone who can send UDP packets to the address can trigger them.
  * @note Like Client: use it from one thread. With an Agent in the same process, create the Agent first.
  */
 class NotificationReceiver : public NotificationSource {
@@ -78,6 +81,14 @@ public:
     /// @brief Adds a handler; all handlers get every notification. Exceptions from handlers are ignored.
     /// @param[in] handler The handler.
     void onNotification(std::function<void(const Notification&)> handler) override;
+
+    /**
+     * @brief Accepts only notifications with one of these community strings.
+     * @param[in] communities The accepted communities; empty = accept every notification (the default).
+     * @note Other notifications are dropped before any handler runs, and informs among them are not acknowledged.
+     *       Communities travel in clear text: this keeps out strangers, not attackers who can read the traffic.
+     */
+    void acceptCommunities(std::vector<std::string> communities);
 
     /**
      * @brief Waits for and processes incoming messages.

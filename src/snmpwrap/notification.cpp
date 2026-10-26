@@ -2,6 +2,7 @@
 
 #include <sys/select.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 
@@ -21,6 +22,7 @@ const Oid kSnmpTraps{1, 3, 6, 1, 6, 3, 1, 1, 5};  // generic v1 traps: snmpTraps
 struct NotificationReceiver::Impl {
     void* handle = nullptr;  // from snmp_sess_add()
     std::vector<std::function<void(const Notification&)>> handlers;
+    std::vector<std::string> communities;  // accepted; empty = all
     std::atomic<bool> running{true};
 
     ~Impl() {
@@ -40,6 +42,8 @@ struct NotificationReceiver::Impl {
     void received(netsnmp_pdu* pdu) {
         Notification n;
         if (pdu->community) n.community.assign(reinterpret_cast<const char*>(pdu->community), pdu->community_len);
+        if (!communities.empty() && std::find(communities.begin(), communities.end(), n.community) == communities.end())
+            return;  // not accepted: no handler, no acknowledgement
         if (netsnmp_transport* t = snmp_sess_transport(handle); t && t->f_fmtaddr) {
             char* addr = t->f_fmtaddr(t, pdu->transport_data, pdu->transport_data_length);
             if (addr) n.source = addr;
@@ -127,6 +131,10 @@ NotificationReceiver::~NotificationReceiver() = default;
 
 void NotificationReceiver::onNotification(std::function<void(const Notification&)> handler) {
     if (handler) impl_->handlers.push_back(std::move(handler));
+}
+
+void NotificationReceiver::acceptCommunities(std::vector<std::string> communities) {
+    impl_->communities = std::move(communities);
 }
 
 bool NotificationReceiver::poll(std::chrono::milliseconds timeout) {

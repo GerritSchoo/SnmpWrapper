@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
         // notifications (agent -> client): make sensor 2 too warm and wait for appLimitExceeded
         if (argc > 3) {
             snmpwrap::NotificationReceiver receiver(argv[3]);
+            receiver.acceptCommunities({"public"});  // the community snmpd sends with (trap2sink ... public)
             mib::Notifications notifications(receiver);
             bool received = false;
             notifications.onAppLimitExceeded([&](const mib::AppLimitExceeded& n) {
