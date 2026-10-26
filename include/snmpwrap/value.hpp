@@ -152,6 +152,16 @@ public:
         return type_ == Type::NoSuchObject || type_ == Type::NoSuchInstance || type_ == Type::EndOfMibView;
     }
 
+    /**
+     * @brief Checks whether this value can stand for an object declared with type @p declared.
+     * @param[in] declared The type from the MIB.
+     * @return True if type() == @p declared, or for an OctetString where Bits is declared: BITS travel as
+     *         OCTET STRING on the wire, so a received BITS value arrives as Type::OctetString.
+     */
+    bool fits(Type declared) const noexcept {
+        return type_ == declared || (declared == Type::Bits && type_ == Type::OctetString);
+    }
+
     /// @name Accessors (throw Error on a type mismatch)
     /// @{
 

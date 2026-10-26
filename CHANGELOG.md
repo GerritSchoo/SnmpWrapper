@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- BITS values are sent as OCTET STRING (RFC 2578 7.1.4), no longer as the SMIv1 BIT STRING. Serving a BITS object
+  broke the AgentX session (AgentX has no BIT STRING type), and SETs from standard managers (`snmpset … b`) were
+  refused with wrongType. Received OCTET STRINGs are accepted wherever BITS are declared (`Value::fits()`).
+- `DataAgent`: rolling back a SET request restores the old values without calling `onSet` again. Before, a hook that
+  refused the old value left the new value in `Data` although the manager got an error, and a rolled-back row creation
+  was reported to `onSet` as a destroy.
+
+### Added
+- `Value::fits(Type)` – whether a value can stand for an object of a declared type (OctetString for Bits).
+- `Mib::onUndo()` – start of the rollback of a SET request.
+
 ## 0.2.0
 
 One way to use the library: the MIB describes the data, the build generates the C++ types.

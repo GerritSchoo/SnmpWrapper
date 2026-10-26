@@ -265,7 +265,7 @@ it on every level; pick the one that matches what belongs together in your MIB:
 
 | Hook | Called | Use it to |
 |---|---|---|
-| `adapter.onSet(f)` | while the request is written, per value: `f(mib::Object, index)` | **check** a value: throw `snmpwrap::SetError` to refuse the whole request (the old values come back) |
+| `adapter.onSet(f)` | while the request is written, per value: `f(mib::Object, index)` | **check** a value: throw `snmpwrap::SetError` to refuse the whole request (the old values come back without calling `onSet` again) |
 | `adapter.onChanged(f)` | **after the commit**, per changed value: `f(mib::Object, index)` | react to single values |
 | `adapter.on<Table>Row(f)` | after the commit, per changed or created row: `f(index, row)` | a row is one message (e.g. one command) |
 | `adapter.on<Group>(f)` | after the commit, once if anything in the subtree changed: `f(const Data::<Group>&)` | a subtree is one message (e.g. a settings block) |

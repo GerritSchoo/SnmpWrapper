@@ -312,6 +312,15 @@ public:
      */
     void onRequestEnd(std::function<void(bool committed)> hook) { requestEnd_ = std::move(hook); }
 
+    /**
+     * @brief Sets a function that is called when the rollback of a SET request starts, before any value is put back.
+     * @param[in] hook Must not throw (exceptions are ignored). Replaces a previous hook; empty = none.
+     * @note The set / destroy / setState callbacks that follow restore earlier values; they are not changes made by
+     *       a manager. The generated DataAgent uses this to restore its Data without calling its hooks.
+     *       onRequestEnd(false) follows once the rollback is done.
+     */
+    void onUndo(std::function<void()> hook) { undoStart_ = std::move(hook); }
+
     /// @copydoc Handler::get
     std::optional<Value> get(const Oid& oid) override;
     /// @copydoc Handler::getNext
@@ -351,6 +360,7 @@ private:
     std::vector<Object> objects_;       // sorted by key; rebuilt lazily
     bool objectsDirty_ = true;
     std::function<void(bool)> requestEnd_;
+    std::function<void()> undoStart_;
 };
 
 }  // namespace snmpwrap

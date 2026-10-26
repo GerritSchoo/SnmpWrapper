@@ -444,7 +444,7 @@ std::vector<IndexSpec> MibModel::indexSpecs(const MibNode& table) const {
 // ---------------------------------------------------------------------------------------------
 
 void MibModel::validate(const MibNode& node, const Value& value) const {
-    if (value.type() != node.type)
+    if (!value.fits(node.type))
         throw SetError(ErrorStatus::WrongType, node.name + ": expected " + toString(node.type) + ", got " + toString(value.type()));
 
     auto inRanges = [&](std::int64_t v) {
@@ -492,7 +492,9 @@ void MibModel::validate(const MibNode& node, const Value& value) const {
 std::string MibModel::formatValue(const MibNode* node, const Value& value) const {
     if (value.isException()) return toString(value.type());
     std::string out;
-    switch (value.type()) {
+    // a BITS object read from an agent arrives as OCTET STRING: show it as BITS
+    const Type type = node && value.fits(node->type) ? node->type : value.type();
+    switch (type) {
         case Type::Integer: {
             const std::int32_t v = value.asInt();
             out = std::to_string(v);

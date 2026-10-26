@@ -490,7 +490,7 @@ NotificationSig notificationSig(const MibModel& m, const Module& mod, const MibN
 void genCheck(W& w, const MibNode& n) {
     w("/// MIB check of " + n.name + ": " + accessText(n));
     w("[[maybe_unused]] void " + checkFn(n) + "(const snmpwrap::Value& v) {");
-    w("    if (v.type() != " + typeEnum(n.type) + ")");
+    w("    if (!v.fits(" + typeEnum(n.type) + "))");
     w("        throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongType, \"" + n.name + ": expected " + toString(n.type) + "\");");
     if (hasEnum(n)) {
         w("    switch (v.asInt()) {");
@@ -681,6 +681,10 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             w("    void set" + F + "(" + paramType(*n) + " value) override {");
             w("        std::lock_guard<std::mutex> l(mu);");
             w("        auto& slot = d." + m + ";");
+            w("        if (rollingBack) {  // the request is undone: restore, this is no change by a manager");
+            w("            slot = value;");
+            w("            return;");
+            w("        }");
             w("        const auto old = slot;");
             w("        slot = value;");
             w("        try {");
@@ -736,6 +740,10 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
                 w("    void set" + F + "(" + ip + ", " + paramType(*c) + " value) override {");
                 w("        std::lock_guard<std::mutex> l(mu);");
                 w("        auto& slot = " + tbl + ".at(index)." + f + ";");
+                w("        if (rollingBack) {  // the request is undone: restore, this is no change by a manager");
+                w("            slot = value;");
+                w("            return;");
+                w("        }");
                 w("        const auto old = slot;");
                 w("        slot = value;");
                 w("        try {");
@@ -779,6 +787,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             w("        std::lock_guard<std::mutex> l(mu);");
             w("        " + tbl + ".erase(index);");
             w("        " + filled + ".erase(index);");
+            w("        if (rollingBack) return;  // undoes a create of this request");
             w("        try {");
             w("            changed(Object::" + ident(t.rowStatus->name) + ", index.toOid());");
             w("        } catch (...) {");
@@ -1059,7 +1068,7 @@ std::vector<NotifField> notificationFields(const MibModel& m, const Module& mod,
     for (const std::string& objName : n.objects) {
         const MibNode& ob = resolveName(m, n.module, objName);
         const std::string f = ident(ob.name), oid = "snmpwrap::Oid" + oidInit(ob.oid);
-        const std::string assign = "if (vb.value.type() == " + typeEnum(ob.type) + ") r." + f + " = " + fromValue(ob, "vb.value") + ";";
+        const std::string assign = "if (vb.value.fits(" + typeEnum(ob.type) + ")) r." + f + " = " + fromValue(ob, "vb.value") + ";";
         if (ob.kind == MibNodeKind::Column) {
             const Oid entryOid(std::vector<SubId>(ob.oid.ids().begin(), ob.oid.ids().end() - 1));
             const Table* t = nullptr;
@@ -1409,6 +1418,8 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w("    /// May throw snmpwrap::SetError to refuse a value change or a new row (the request is rolled back); the destruction");
         w("    /// of a row cannot be refused. Runs inside the agent");
         w("    /// callback with the mutex held (do not call lock() from it), possibly before the whole request is committed.");
+        w("    /// When a request is rolled back, the old values are restored without calling the hook again; the messages");
+        w("    /// (onChanged, on<Group>, on<Table>Row) report committed changes only.");
         w("    using SetHook = std::function<void(Object object, const snmpwrap::Oid& index)>;");
         w();
         w("    /// @brief Called before a manager reads a value (GET, GETNEXT, walk): which object and, for table cells, the row");
@@ -1584,7 +1595,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     w();
     w("/// Value of a Client result, or an Error for exceptions / unexpected types.");
     w("[[maybe_unused]] const snmpwrap::Value& expect(const snmpwrap::VarBind& vb, snmpwrap::Type type, const char* name) {");
-    w("    if (vb.value.type() != type)");
+    w("    if (!vb.value.fits(type))");
     w("        throw snmpwrap::Error(std::string(name) + \": agent returned \" + vb.value.str());");
     w("    return vb.value;");
     w("}");
@@ -1831,7 +1842,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("        switch (vb.oid[" + entry + ".size()]) {");
         for (const MibNode* c : t.columns) {
             w("            case " + std::to_string(c->oid.ids().back()) + ":");
-            w("                if (vb.value.type() == " + typeEnum(c->type) + ") row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
+            w("                if (vb.value.fits(" + typeEnum(c->type) + ")) row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
             w("                break;");
         }
         if (t.rowStatus) {
@@ -1961,6 +1972,11 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    std::mutex mu;");
         w("    SetHook hook;");
         w("    GetHook getHook;");
+        w("    bool rollingBack = false;  // from Mib::onUndo until the end of the request: setters restore old values");
+        w("    void undoStart() noexcept {");
+        w("        std::lock_guard<std::mutex> l(mu);");
+        w("        rollingBack = true;");
+        w("    }");
         w("    void changed(Object object, const snmpwrap::Oid& index = snmpwrap::Oid{}) {");
         w("        if (hook) hook(object, index);");
         w("    }");
@@ -2009,6 +2025,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             for (const MsgGroup& g : groups)
                 w("            if (" + g.pend + " && " + g.var + ") quietly([&] { " + g.var + "(" + g.access + "); });");
             w("        }");
+            w("        rollingBack = false;");
             w("        changes.clear();");
             for (const MsgTable& t : tables) w("        " + t.rows + ".clear();");
             for (const MsgGroup& g : groups) w("        " + g.pend + " = false;");
@@ -2049,7 +2066,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("        if (vb.value.isException()) return true;");
         for (const MibNode* n : mod.scalars) {
             w("        if (vb.oid == oids::" + ident(n->name) + " + snmpwrap::SubId{0}) {");
-            w("            if (vb.value.type() == " + typeEnum(n->type) + ") d." + scalarPaths[n] + " = " + fromValue(*n, "vb.value") + ";");
+            w("            if (vb.value.fits(" + typeEnum(n->type) + ")) d." + scalarPaths[n] + " = " + fromValue(*n, "vb.value") + ";");
             w("            return true;");
             w("        }");
         }
@@ -2063,7 +2080,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("            switch (vb.oid[" + entry + ".size()]) {");
             for (const MibNode* c : t.columns) {
                 w("                case " + std::to_string(c->oid.ids().back()) + ":");
-                w("                    if (vb.value.type() == " + typeEnum(c->type) + ") row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
+                w("                    if (vb.value.fits(" + typeEnum(c->type) + ")) row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
                 w("                    break;");
             }
             if (t.rowStatus) {
@@ -2084,11 +2101,13 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {");
         w("    snmpwrap::Mib& mib = registerMib(agent, *impl_);");
         w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
+        w("    mib.onUndo([impl = impl_.get()] { impl->undoStart(); });");
         w("}");
         w();
         w("DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_unique<Impl>(data)) {");
         w("    bind(mib, *impl_);");
         w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
+        w("    mib.onUndo([impl = impl_.get()] { impl->undoStart(); });");
         w("}");
         w();
         w("DataAgent::~DataAgent() = default;");

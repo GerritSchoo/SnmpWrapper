@@ -39,6 +39,7 @@ struct State {
     std::string name = "snmpwrap";
     std::uint32_t counter = 0;
     std::int32_t limit = 50;
+    std::string flags = std::string(1, '\x80');  // swtFlags: red
     std::map<std::int32_t, Row> rows{{1, {"eth0", 100, 2}}, {2, {"eth1", 200, 1}}, {3, {"lo", 5, 3}}};
     std::map<std::uint32_t, RowTableEntry> rowTable;                // swtRowTable, rows created by managers
     std::map<Oid, std::int32_t> conns;                              // swtConnTable
@@ -100,6 +101,9 @@ int main(int argc, char** argv) {
                             [&] { return Value::timeTicks(st.seconds() * 100); }});
         mib.scalar({1, 6}, {Type::Counter64,  // swtBigCounter
                             [] { return Value::counter64(4294967297ULL); }});
+        mib.scalar({1, 7}, {Type::Bits,  // swtFlags
+                            [&] { std::lock_guard l(st.mutex); return Value::bits(st.flags); },
+                            [&](const Value& v) { std::lock_guard l(st.mutex); st.flags = v.asString(); }});
 
         // --- table (swtTable = .2, entry .2.1, columns 2..4, index swtIndex) --------------------
         TableDef t;

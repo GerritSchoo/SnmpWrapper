@@ -20,6 +20,11 @@ void callUser(std::size_t vi, F&& f) {
     }
 }
 
+/// A SET value as the declared type: BITS arrive as OCTET STRING (see Value::fits()).
+Value asDeclared(const Value& v, Type declared) {
+    return v.type() == Type::OctetString && declared == Type::Bits ? Value::bits(v.asString()) : v;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -82,6 +87,12 @@ public:
     }
 
     void undo() noexcept override {
+        if (undoStart_) {
+            try {
+                undoStart_();
+            } catch (...) {
+            }
+        }
         for (auto it = undone_.rbegin(); it != undone_.rend(); ++it) {
             try {
                 (*it)();
@@ -105,7 +116,8 @@ public:
 
     std::vector<Op> ops_;
     std::vector<std::function<void()>> commits_;
-    std::function<void(bool)> end_;  // Mib::onRequestEnd hook
+    std::function<void(bool)> end_;   // Mib::onRequestEnd hook
+    std::function<void()> undoStart_;  // Mib::onUndo hook
 
 private:
     void finish(bool committed) noexcept {
@@ -117,9 +129,6 @@ private:
         end_ = nullptr;  // once per request
     }
 
-public:
-
-private:
     std::vector<std::function<void()>> undone_;  // undo closures of successfully applied ops
 };
 
@@ -345,6 +354,7 @@ std::optional<VarBind> Mib::getNext(const Oid& after) {
 std::unique_ptr<SetTransaction> Mib::prepare(const std::vector<VarBind>& sets) {
     auto txn = std::make_unique<Txn>();
     txn->end_ = requestEnd_;
+    txn->undoStart_ = undoStart_;
 
     struct Group {
         const TableDef* def = nullptr;
@@ -369,13 +379,14 @@ std::unique_ptr<SetTransaction> Mib::prepare(const std::vector<VarBind>& sets) {
             if (auto s = scalars_.find(object); s != scalars_.end()) {
                 const ScalarDef& def = s->second;
                 if (!def.set) throw SetError(ErrorStatus::NotWritable, "not writable: " + oid.str(), i);
-                if (value.type() != def.type)
+                if (!value.fits(def.type))
                     throw SetError(ErrorStatus::WrongType,
                                    std::string("expected ") + toString(def.type) + ", got " + toString(value.type()), i);
-                if (def.validate) callUser(i, [&] { def.validate(value); });
+                const Value v = asDeclared(value, def.type);
+                if (def.validate) callUser(i, [&] { def.validate(v); });
                 Value old;
                 callUser(i, [&] { old = def.get(); });
-                txn->ops_.push_back({i, [&def, value] { def.set(value); }, [&def, old] { def.set(old); }});
+                txn->ops_.push_back({i, [&def, v] { def.set(v); }, [&def, old] { def.set(old); }});
                 continue;
             }
         }
@@ -397,7 +408,7 @@ std::unique_ptr<SetTransaction> Mib::prepare(const std::vector<VarBind>& sets) {
             if (def.rowStatus && col->id == def.rowStatus->column)
                 g.rowStatus = {value, i};
             else
-                g.cols[col->id] = {value, i};
+                g.cols[col->id] = {asDeclared(value, col->type), i};
             matched = true;
             break;
         }

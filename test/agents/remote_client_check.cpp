@@ -52,6 +52,11 @@ int main(int argc, char** argv) {
         remote.swtScalars.swtLimit.set(42);
         check(remote.swtScalars.swtLimit.get() == 42, "swtScalars.swtLimit set / get");
         check(remote.swtScalars.swtBigCounter.get() == 4294967297ULL, "Counter64 scalar");
+        const std::string blue(1, '\x20');  // BITS arrive as OCTET STRING
+        remote.swtScalars.swtFlags.set(blue);
+        check(remote.swtScalars.swtFlags.get() == blue, "BITS scalar set / get");
+        check(remote.read().swtScalars.swtFlags == blue, "read(): BITS scalar");
+        remote.swtScalars.swtFlags.set(std::string(1, '\x80'));
         bool rejected = false;
         try {
             remote.swtScalars.swtLimit.set(500);  // MIB range 1..100, checked before sending

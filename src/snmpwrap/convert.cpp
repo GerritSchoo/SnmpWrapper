@@ -74,7 +74,8 @@ void assign(netsnmp_variable_list* var, const Value& v) {
         case Type::Opaque:
         case Type::Bits: {
             const std::string& s = v.asString();
-            const u_char asn = v.type() == Type::Opaque ? ASN_OPAQUE : v.type() == Type::Bits ? ASN_BIT_STR : ASN_OCTET_STR;
+            // SMIv2 BITS are encoded as OCTET STRING (RFC 2578 7.1.4); ASN_BIT_STR is the obsolete SMIv1 BIT STRING
+            const u_char asn = v.type() == Type::Opaque ? ASN_OPAQUE : ASN_OCTET_STR;
             rc = snmp_set_var_typed_value(var, asn, s.data(), s.size());
             break;
         }
@@ -122,7 +123,7 @@ Value fromVar(const netsnmp_variable_list* var) {
             return Value::string(std::string(reinterpret_cast<const char*>(var->val.string), var->val_len));
         case ASN_OPAQUE:
             return Value::opaque(std::string(reinterpret_cast<const char*>(var->val.string), var->val_len));
-        case ASN_BIT_STR:
+        case ASN_BIT_STR:  // obsolete SMIv1 BIT STRING; SMIv2 BITS arrive as ASN_OCTET_STR
             return Value::bits(std::string(reinterpret_cast<const char*>(var->val.string), var->val_len));
         case ASN_OBJECT_ID:
             return Value::oid(fromNetOid(var->val.objid, var->val_len / sizeof(::oid)));

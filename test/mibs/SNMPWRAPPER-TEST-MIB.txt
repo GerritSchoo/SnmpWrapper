@@ -68,6 +68,13 @@ swtBigCounter OBJECT-TYPE
     DESCRIPTION "Constant 4294967297 (needs 64 bit). Not available in SNMPv1."
     ::= { swtScalars 6 }
 
+swtFlags OBJECT-TYPE
+    SYNTAX      BITS { red(0), green(1), blue(2) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION "Writable BITS; travels as OCTET STRING on the wire. Initially red (80 hex)."
+    ::= { swtScalars 7 }
+
 -- ---------------------------------------------------------------------------------------------
 -- Table: snmpWrapperTestMIB.2.1.<column>.<swtIndex>
 -- ---------------------------------------------------------------------------------------------

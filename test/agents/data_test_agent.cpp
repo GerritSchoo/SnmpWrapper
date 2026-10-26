@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
         data.swtScalars.swtName = "snmpwrap";
         data.swtScalars.swtLimit = 50;
         data.swtScalars.swtBigCounter = 4294967297ULL;
+        data.swtScalars.swtFlags = std::string(1, '\x80');  // BITS: red
         data.swtTable[1] = {"eth0", 100, SwtEntryStatus::up};
         data.swtTable[2] = {"eth1", 200, SwtEntryStatus::down};
         data.swtTable[3] = {"lo", 5, SwtEntryStatus::testing};

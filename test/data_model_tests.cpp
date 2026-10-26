@@ -256,6 +256,63 @@ void testHook() {
     CHECK(s.data.boatName == "hooked");
 }
 
+void testRollbackBypassesHook() {
+    Served s;
+    const Oid name = scalar(m::oids::boatName);
+    const Oid sensor = cell(m::oids::extendedRollSensor, m::ExtendedRollEntryIndex{1}.toOid());
+    std::vector<std::string> events;
+    // refuses every sensor change, and would refuse putting boatName back to "aurora"
+    const Oid rowA = m::ExtendedPitchEntryIndex{1, "a"}.toOid(), rowB = m::ExtendedPitchEntryIndex{2, "b"}.toOid();
+    s.adapter.onSet([&](m::Object object, const Oid& index) {
+        events.push_back(std::string(m::toString(object)) + "@" + index.str());
+        if (object == m::Object::extendedRollSensor) throw SetError(ErrorStatus::InconsistentValue, "no");
+        if (object == m::Object::boatName && s.data.boatName == "aurora") throw SetError(ErrorStatus::InconsistentValue, "no");
+        if (object == m::Object::extendedPitchStatus && index == rowB) throw SetError(ErrorStatus::InconsistentValue, "no");
+    });
+    int changed = 0;
+    s.adapter.onChanged([&](m::Object, const Oid&) { ++changed; });
+
+    // boatName is applied first, the sensor fails -> rollback restores boatName although the hook would refuse it
+    const auto e = trySet(s.mib, {{name, Value::string("neptune")}, {sensor, Value::string("g")}});
+    CHECK(failsWith(e, ErrorStatus::InconsistentValue, 1));
+    CHECK(s.data.boatName == "aurora");
+    CHECK(s.data.attitude.extendedRollTable[1].extendedRollSensor == "gyro-1");
+    CHECK((events == std::vector<std::string>{"boatName@", "extendedRollSensor@1"}));  // not called for the rollback
+    CHECK(changed == 0);
+
+    // row A is created, row B is refused -> A is destroyed again without reporting a destroy (rows run in index order)
+    events.clear();
+    CHECK(trySet(s.mib, {{cell(m::oids::extendedPitchValue, rowA), Value::integer(1)},
+                         {cell(m::oids::extendedPitchStatus, rowA), Value::integer(4)},
+                         {cell(m::oids::extendedPitchValue, rowB), Value::integer(2)},
+                         {cell(m::oids::extendedPitchStatus, rowB), Value::integer(4)}}));
+    CHECK(s.data.attitude.extendedPitchTable.empty());
+    CHECK((events == std::vector<std::string>{"extendedPitchStatus@" + rowA.str(), "extendedPitchStatus@" + rowB.str()}));
+
+    // the next request is a normal one again
+    events.clear();
+    CHECK(!trySet(s.mib, {{name, Value::string("zephyr")}}));
+    CHECK(s.data.boatName == "zephyr" && changed == 1);
+    CHECK((events == std::vector<std::string>{"boatName@"}));
+}
+
+void testBits() {
+    namespace t = snmpwrapper_test_mib;
+    t::Data data;
+    data.swtScalars.swtFlags = std::string(1, '\x80');
+    Mib mib{t::oids::root};
+    t::DataAgent adapter{mib, data};
+    const Oid flags = scalar(t::oids::swtFlags);
+
+    CHECK(mib.get(flags) == Value::bits(std::string(1, '\x80')));  // served with the declared type
+    // a manager's BITS arrive as OCTET STRING (no own tag on the wire) and are accepted
+    CHECK(!trySet(mib, {{flags, Value::string(std::string(1, '\x60'))}}));
+    CHECK(data.swtScalars.swtFlags == std::string(1, '\x60'));
+    CHECK(!trySet(mib, {{flags, Value::bits(std::string(1, '\x20'))}}));
+    CHECK(data.swtScalars.swtFlags == std::string(1, '\x20'));
+    CHECK(failsWith(trySet(mib, {{flags, Value::integer(1)}}), ErrorStatus::WrongType, 0));
+}
+
 void testGetHook() {
     Served s;
     int reads = 0;
@@ -459,6 +516,8 @@ int main() {
     testSet();
     testRowStatus();
     testHook();
+    testRollbackBypassesHook();
+    testBits();
     testGetHook();
     testRowCompleteness();
     testImportedTypesAndSingleGroup();

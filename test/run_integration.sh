@@ -125,9 +125,9 @@ mode() {
     expect_eq "get table cell"    "$(tool snmpget -Oqv "$TARGET" $ROOT.2.1.2.1 2>&1)" '"eth0"'
     expect_eq "get table cell (gauge)" "$(tool snmpget -Oqv "$TARGET" $ROOT.2.1.3.2 2>&1)" "200"
     expect_eq "getnext scalar -> scalar" "$(tool snmpgetnext -Oqn "$TARGET" $ROOT.1.4.0 2>&1 | cut -d' ' -f1)" "$ROOT.1.5.0"
-    expect_eq "getnext scalar -> table"  "$(tool snmpgetnext -Oqn "$TARGET" $ROOT.1.6.0 2>&1 | cut -d' ' -f1)" "$ROOT.2.1.2.1"
+    expect_eq "getnext scalar -> table"  "$(tool snmpgetnext -Oqn "$TARGET" $ROOT.1.7.0 2>&1 | cut -d' ' -f1)" "$ROOT.2.1.2.1"
     # v1 does not know Counter64: the agent skips swtBigCounter in GETNEXT
-    expect_eq "getnext skips Counter64 in v1 only" "$(tool snmpgetnext -Oqn "$TARGET" $ROOT.1.5.0 2>&1 | cut -d' ' -f1)"         "$([ $v1 = 1 ] && echo $ROOT.2.1.2.1 || echo $ROOT.1.6.0)"
+    expect_eq "getnext skips Counter64 in v1 only" "$(tool snmpgetnext -Oqn "$TARGET" $ROOT.1.5.0 2>&1 | cut -d' ' -f1)"         "$([ $v1 = 1 ] && echo $ROOT.1.7.0 || echo $ROOT.1.6.0)"
     w=$(tool snmpwalk -Oqn "$TARGET" $ROOT.2 2>&1)
     expect_eq "walk table: 3 rows x 3 columns" "$(lines "$w")" 9
     expect_eq "walk table: last OID" "$(printf '%s\n' "$w" | tail -1 | cut -d' ' -f1)" "$ROOT.2.1.4.3"
@@ -145,7 +145,7 @@ mode() {
     echo "== [$name] reads via snmpwrap::Client"
     expect_eq "client get" "$(cli "$TARGET" get $ROOTN.2.1.2.1 2>&1)" "$ROOTN.2.1.2.1 = OctetString: \"eth0\""
     expect_eq "client walk table (GETBULK or GETNEXT): 9 lines" "$(lines "$(cli "$TARGET" walk $ROOTN.2 2>&1)")" 9
-    expect_eq "client getnext" "$(cli "$TARGET" getnext $ROOTN.1.6.0 2>&1 | cut -d' ' -f1)" "$ROOTN.2.1.2.1"
+    expect_eq "client getnext" "$(cli "$TARGET" getnext $ROOTN.1.7.0 2>&1 | cut -d' ' -f1)" "$ROOTN.2.1.2.1"
     if [ $v1 = 1 ]; then
         expect_contains "client Counter64 in v1 -> agent error (noSuchName=2)" "$(cli "$TARGET" get $ROOTN.1.6.0 2>&1)" "agent error 2"
         expect_contains "client getbulk in v1 is refused" "$(cli "$TARGET" getbulk $ROOTN.2 2>&1)" "GETBULK is not available"
@@ -237,9 +237,22 @@ c2=$(tool snmpget -Oqv "$TARGET" $ROOT.1.2.0 2>&1)
 [ "$c2" -eq $((c1 + 1)) ] 2>/dev/null && pass "counter increments per read ($c1 -> $c2)" || fail "counter increments" "c1=$c1 c2=$c2"
 expect_contains "swtUptime is TimeTicks" "$(tool snmpget "$TARGET" $ROOT.1.5.0 2>&1)" "Timeticks"
 full=$(tool snmpwalk -Oqn "$TARGET" $ROOT 2>&1 | grep -v -E '\.99999\.3\.')
-expect_eq "full walk: 6 scalars + 9 + 3 + 2 x $BIG_ROWS" "$(lines "$full")" $((6 + 9 + 3 + 2 * BIG_ROWS))
+expect_eq "full walk: 7 scalars + 9 + 3 + 2 x $BIG_ROWS" "$(lines "$full")" $((7 + 9 + 3 + 2 * BIG_ROWS))
 expect_eq "full walk is in strictly ascending OID order" \
     "$(printf '%s\n' "$full" | cut -d' ' -f1 | sort -c -V -u 2>&1 && echo sorted)" "sorted"
+
+echo "== BITS (SMIv2: encoded as OCTET STRING, RFC 2578 7.1.4)"
+F=$ROOT.1.7.0
+RWM=(-v2c -c private -M "+$MIB_DIR" -m +SNMPWRAPPER-TEST-MIB)
+expect_contains "get BITS: OCTET STRING on the wire" "$(tool snmpget -Ox "$TARGET" $F 2>&1)" "Hex-STRING: 80"
+snmpset "${RWM[@]}" "$TARGET" SNMPWRAPPER-TEST-MIB::swtFlags.0 b "1 2" >"$WORK/bits.out" 2>&1
+expect_eq "snmpset b (bits green, blue -> OCTET STRING) accepted" "$?" 0
+expect_contains "  ... stored" "$(tool snmpget -Ox "$TARGET" $F 2>&1)" "Hex-STRING: 60"
+expect_eq "client_cli -m formats BITS as hex" \
+    "$("$CLIENT_BIN" -v 2c -c private -m "$MIB_DIR/SNMPWRAPPER-TEST-MIB.txt" "$TARGET" get swtFlags.0 2>&1)" "swtFlags.0 = 60"
+expect_eq "client_cli -m sets BITS" \
+    "$("$CLIENT_BIN" -v 2c -c private -m "$MIB_DIR/SNMPWRAPPER-TEST-MIB.txt" "$TARGET" set swtFlags.0 = "'80'H" 2>&1)" "OK"
+expect_contains "  ... visible to snmpget" "$(tool snmpget -Ox "$TARGET" $F 2>&1)" "Hex-STRING: 80"
 
 echo "== large table (nextRow/hasRow, $BIG_ROWS rows)"
 bulk=$(tool snmpbulkwalk -Oqn -Cr25 "$TARGET" $ROOT.6 2>&1)

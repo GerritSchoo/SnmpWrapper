@@ -104,6 +104,11 @@ void testValue() {
     CHECK(Value::bits("x") != Value::opaque("x"));
     CHECK(std::string(toString(Type::Opaque)) == "Opaque" && std::string(toString(Type::Bits)) == "Bits");
     CHECK(Value::bits(std::string("\xA0", 1)).str() == "Bits (hex): A0");
+
+    // fits(): BITS arrive as OCTET STRING, nothing else is interchangeable
+    CHECK(Value::string("x").fits(Type::Bits) && Value::bits("x").fits(Type::Bits));
+    CHECK(Value::string("x").fits(Type::OctetString) && !Value::bits("x").fits(Type::OctetString));
+    CHECK(!Value::opaque("x").fits(Type::Bits) && !Value::integer(1).fits(Type::Gauge32));
 }
 
 // ---------------------------------------------------------------------------------------------
