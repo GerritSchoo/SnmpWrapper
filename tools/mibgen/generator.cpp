@@ -385,6 +385,14 @@ Module collect(const MibModel& m, const Options& o) {
     if (!o.rootName.empty()) {
         mod.root = m.oid(o.rootName);
         mod.hasRoot = true;
+        // the agent registers this subtree and Remote::read() walks it: every object must lie below it
+        auto checkBelow = [&](const MibNode& n) {
+            if (!mod.root.isPrefixOf(n.oid) || n.oid.size() <= mod.root.size())
+                throw Error("object '" + n.name + "' (" + n.oid.str() + ") is not below the root " + o.rootName + " (" +
+                            mod.root.str() + ")");
+        };
+        for (const MibNode* n : mod.scalars) checkBelow(*n);
+        for (const Table& t : mod.tables) checkBelow(*t.table);
     } else {
         std::vector<Oid> objs;
         for (const MibNode* n : mod.scalars) objs.push_back(n->oid);
@@ -1207,7 +1215,9 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     // --- OIDs
     w("/// @brief Object OIDs of " + mod.name + " (without instance suffix).");
     w("namespace oids {");
-    if (mod.hasRoot) w("inline const snmpwrap::Oid root" + oidInit(mod.root) + ";  ///< registration root (common prefix of all objects)");
+    if (mod.hasRoot)
+        w("inline const snmpwrap::Oid root" + oidInit(mod.root) + ";  ///< registration root (" +
+          (o.rootName.empty() ? std::string("common prefix of all objects") : o.rootName) + ")");
     for (const MibNode* n : mod.all) w("inline const snmpwrap::Oid " + ident(n->name) + oidInit(n->oid) + ";  ///< " + n->name + " (" + toString(n->kind) + ")");
     w("}  // namespace oids");
     w();

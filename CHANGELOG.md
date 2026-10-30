@@ -15,6 +15,9 @@
   `build/coverage/html/`.
 
 ### Fixed
+- Generator: a `--root` / `ROOT` that does not lie above every object of the module (e.g. a group inside it) is
+  refused when generating. Before, the code was generated without a message; `registerMib()` / `DataAgent` then threw
+  at run time, and `Remote::read()` silently missed the objects outside the root.
 - BITS values are sent as OCTET STRING (RFC 2578 7.1.4), no longer as the SMIv1 BIT STRING. Serving a BITS object
   broke the AgentX session (AgentX has no BIT STRING type), and SETs from standard managers (`snmpset … b`) were
   refused with wrongType. Received OCTET STRINGs are accepted wherever BITS are declared (`Value::fits()`).

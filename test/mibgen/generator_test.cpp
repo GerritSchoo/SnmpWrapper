@@ -124,7 +124,9 @@ TEST_F(GeneratorTest, BaseNameIsNamespaceAndIncludeName) {
 }
 
 TEST_F(GeneratorTest, RootNameSetsTheRegistrationRoot) {
-    EXPECT_THAT(gen("SNMPWRAPPER-TEST-MIB", "", "enterprises").header, HasSubstr("inline const snmpwrap::Oid root{1, 3, 6, 1, 4, 1};"));
+    EXPECT_THAT(gen("SNMPWRAPPER-TEST-MIB", "", "enterprises").header,
+                HasSubstr("inline const snmpwrap::Oid root{1, 3, 6, 1, 4, 1};  ///< registration root (enterprises)"));
+    EXPECT_THAT(gen("SNMPWRAPPER-TEST-MIB").header, HasSubstr("///< registration root (common prefix of all objects)"));
 }
 
 TEST_F(GeneratorTest, SourceInfoIsNamedInTheFirstLine) {
@@ -174,7 +176,19 @@ TEST_F(GeneratorTest, ObjectsWithoutCommonPrefixNeedARoot) {
 }
 
 TEST_F(GeneratorTest, ObjectsOutsideTheRootAreRefused) {
-    EXPECT_THAT(refusal("SPLIT-MIB", "sysDescr"), HasSubstr("object 'splitIso' is not below 1.3.6.1.2.1.1.1"));
+    EXPECT_THAT(refusal("SPLIT-MIB", "sysDescr"),
+                HasSubstr("object 'splitIso' (1.3.6.1.4.1.99999.322.1) is not below the root sysDescr (1.3.6.1.2.1.1.1)"));
+}
+
+TEST_F(GeneratorTest, RootInsideTheModuleIsRefused) {
+    // swtScalars (99999.1) holds the scalars, but the tables are at 99999.2 and up: the agent could not serve them
+    // and Remote::read() would silently miss them
+    EXPECT_THAT(refusal("SNMPWRAPPER-TEST-MIB", "swtScalars"),
+                HasSubstr("object 'swtTable' (1.3.6.1.4.1.99999.2) is not below the root swtScalars (1.3.6.1.4.1.99999.1)"));
+}
+
+TEST_F(GeneratorTest, RootThatIsAnObjectItselfIsRefused) {  // the root must lie strictly above every object
+    EXPECT_THAT(refusal("SNMPWRAPPER-TEST-MIB", "swtLimit"), HasSubstr("is not below the root swtLimit"));
 }
 
 TEST_F(GeneratorTest, UnknownRootNameIsRefused) {
