@@ -45,6 +45,12 @@ struct SessionConfig {
 
     /// Agent address "[udp:|tcp:]host[:port]", e.g. "127.0.0.1:161" (port defaults to 161).
     std::string peer = "127.0.0.1:161";
+    /// Own (source) address of the requests: "192.168.1.5" (fixed IP, any free port) or "192.168.1.5:5000" (fixed IP
+    /// and port; IPv6 as "[fe80::1]:5000"). Empty (default): the operating system picks the address of the outgoing
+    /// interface and a free port. Use it on hosts with several interfaces when the device or a firewall only accepts
+    /// one source address. UDP peers only (Net-SNMP has no source address for TCP: the constructor throws Error);
+    /// an address that does not belong to this host, or a port in use, is a TransportError.
+    std::string localAddress;
     /// Protocol version.
     Version version = Version::V2c;
     /// Community string (v1 / v2c only).

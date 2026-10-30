@@ -2,6 +2,9 @@
 
 #include <cstdlib>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
 
 #include "convert.hpp"
 
@@ -39,6 +42,44 @@ void setPriv(netsnmp_session& sess, const ::oid* proto, std::size_t len) {
     sess.securityPrivProto = const_cast<::oid*>(proto);
     sess.securityPrivProtoLen = len;
 }
+
+/// "192.168.1.5:5000" / "[fe80::1]:5000" name a port, "192.168.1.5" / "fe80::1" do not.
+bool namesPort(const std::string& address) {
+    if (!address.empty() && address.front() == '[') return address.find("]:") != std::string::npos;
+    return address.find(':') != std::string::npos && address.find(':') == address.rfind(':');
+}
+
+/// Net-SNMP reads the source address of a client from the process-wide setting "clientaddr" when it creates the
+/// socket (in snmp_sess_open); netsnmp_session::localname is not used for that. Sets it for one snmp_sess_open
+/// and restores what was there before (e.g. clientaddr from snmp.conf). Holds a lock: only one open at a time.
+class ClientAddrScope {
+public:
+    explicit ClientAddrScope(const std::string& address) : lock_(mutex()) {
+        if (address.empty()) return;
+        if (const char* old = netsnmp_ds_get_string(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR)) oldAddr_ = old;
+        oldUsesPort_ = netsnmp_ds_get_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR_USES_PORT) != 0;
+        netsnmp_ds_set_string(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR, address.c_str());
+        netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR_USES_PORT, namesPort(address) ? 1 : 0);
+        set_ = true;
+    }
+    ~ClientAddrScope() {
+        if (!set_) return;
+        netsnmp_ds_set_string(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR, oldAddr_ ? oldAddr_->c_str() : nullptr);
+        netsnmp_ds_set_boolean(NETSNMP_DS_LIBRARY_ID, NETSNMP_DS_LIB_CLIENT_ADDR_USES_PORT, oldUsesPort_ ? 1 : 0);
+    }
+    ClientAddrScope(const ClientAddrScope&) = delete;
+    ClientAddrScope& operator=(const ClientAddrScope&) = delete;
+
+private:
+    static std::mutex& mutex() {
+        static std::mutex m;
+        return m;
+    }
+    std::lock_guard<std::mutex> lock_;
+    std::optional<std::string> oldAddr_;
+    bool oldUsesPort_ = false;
+    bool set_ = false;
+};
 
 }  // namespace
 
@@ -96,6 +137,8 @@ struct Client::Impl {
 };
 
 Client::Client(const SessionConfig& cfg) : impl_(std::make_unique<Impl>()) {
+    if (!cfg.localAddress.empty() && cfg.peer.rfind("tcp", 0) == 0)
+        throw Error("SessionConfig::localAddress works with UDP peers only, not with " + cfg.peer);
     detail::initLibrary("snmpwrap-client");
     impl_->config = cfg;
 
@@ -154,12 +197,18 @@ Client::Client(const SessionConfig& cfg) : impl_(std::make_unique<Impl>()) {
         sess.community_len = cfg.community.size();
     }
 
-    impl_->handle = snmp_sess_open(&sess);
+    {
+        ClientAddrScope source(cfg.localAddress);
+        impl_->handle = snmp_sess_open(&sess);
+    }
     if (!impl_->handle) {
         char* msg = nullptr;
         snmp_error(&sess, nullptr, nullptr, &msg);
         const std::string text = takeErrorText(msg);
-        throw TransportError("cannot open SNMP session to " + cfg.peer + ": " + text);
+        throw TransportError("cannot open SNMP session to " + cfg.peer + ": " + text +
+                             (cfg.localAddress.empty() ? std::string()
+                                                       : " (localAddress " + cfg.localAddress +
+                                                             ": an address of this host, port free?)"));
     }
 }
 

@@ -3,6 +3,7 @@
 #   generated/  - the code snmpwrap-mibgen generates (Data, DataAgent, Remote, notifications, text output)
 #   mibgen/     - the generator itself (generate(), its refusals, the command line)
 #   agent/      - Agent: registering and removing subtrees (no snmpd: the Agent never connects)
+#   client/     - Client: the own source address (a UDP socket plays the device)
 #   lifecycle   - Agent / Client construction order (each case in a child process)
 #   integration - against a real snmpd (run_integration.sh, run_apps.sh)
 # The GoogleTest suites are registered test by test (gtest_discover_tests): `ctest -L unit` runs them all.
@@ -32,6 +33,10 @@ snmpwrap_gtest(snmpwrap_unit_tests unit
     unit/mib_rowstatus_test.cpp
     unit/mib_model_test.cpp)
 target_link_libraries(snmpwrap_unit_tests PRIVATE snmpwrap::snmpwrap)
+
+# Client: own source address (a plain UDP socket plays the device, no snmpd)
+snmpwrap_gtest(snmpwrap_client_tests client client/client_test.cpp)
+target_link_libraries(snmpwrap_client_tests PRIVATE snmpwrap::snmpwrap)
 
 snmpwrap_gtest(snmpwrap_lifecycle_test lifecycle lifecycle_test.cpp)
 target_link_libraries(snmpwrap_lifecycle_test PRIVATE snmpwrap::snmpwrap)
