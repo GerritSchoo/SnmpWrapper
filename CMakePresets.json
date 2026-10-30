@@ -25,16 +25,29 @@
       "displayName": "Debug, shared library",
       "inherits": "debug",
       "cacheVariables": { "BUILD_SHARED_LIBS": "ON" }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Debug with line / branch coverage (gcov)",
+      "description": "Build output in ./build/coverage; scripts/coverage.sh runs all tests and writes an HTML report.",
+      "inherits": "debug",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "--coverage -O0",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
-    { "name": "shared", "configurePreset": "shared" }
+    { "name": "shared", "configurePreset": "shared" },
+    { "name": "coverage", "configurePreset": "coverage" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
     { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
-    { "name": "shared", "configurePreset": "shared", "output": { "outputOnFailure": true } }
+    { "name": "shared", "configurePreset": "shared", "output": { "outputOnFailure": true } },
+    { "name": "coverage", "configurePreset": "coverage", "output": { "outputOnFailure": true } }
   ]
 }

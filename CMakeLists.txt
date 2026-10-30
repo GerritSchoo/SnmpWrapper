@@ -12,7 +12,6 @@ else()
 endif()
 
 option(SNMPWRAP_BUILD_EXAMPLES "Build example programs" ${SNMPWRAP_IS_TOP_LEVEL})
-option(SNMPWRAP_BUILD_TESTS "Build tests" ${SNMPWRAP_IS_TOP_LEVEL})
 option(SNMPWRAP_INSTALL "Generate install rules" ${SNMPWRAP_IS_TOP_LEVEL})
 option(SNMPWRAP_BUILD_MIBGEN "Build the MIB code generator snmpwrap-mibgen" ON)
 
@@ -54,8 +53,17 @@ endif()
 
 # --- MIB code generator ---------------------------------------------------------------------
 if(SNMPWRAP_BUILD_MIBGEN)
-    add_executable(snmpwrap-mibgen tools/mibgen/main.cpp tools/mibgen/generator.cpp)
-    target_link_libraries(snmpwrap-mibgen PRIVATE snmpwrap)
+    # the generator itself, as a library: linked by the executable and by the generator tests (not installed)
+    add_library(snmpwrap_mibgen_core STATIC tools/mibgen/generator.cpp)
+    target_include_directories(snmpwrap_mibgen_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/mibgen>)
+    target_link_libraries(snmpwrap_mibgen_core PUBLIC snmpwrap)
+    set_target_properties(snmpwrap_mibgen_core PROPERTIES CXX_EXTENSIONS OFF)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(snmpwrap_mibgen_core PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_executable(snmpwrap-mibgen tools/mibgen/main.cpp)
+    target_link_libraries(snmpwrap-mibgen PRIVATE snmpwrap_mibgen_core)
     # the installed generator runs during other projects' builds: it must find libsnmpwrap
     # (next to it in ../lib) and Net-SNMP (wherever it was linked from) without LD_LIBRARY_PATH
     set_target_properties(snmpwrap-mibgen PROPERTIES
@@ -75,8 +83,10 @@ if(SNMPWRAP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-if(SNMPWRAP_BUILD_TESTS)
-    enable_testing()
+# BUILD_TESTING (default ON) comes from CTest, which also calls enable_testing(). Everything that builds
+# tests lives in test/ and needs GoogleTest (apt install libgtest-dev libgmock-dev). Off: cmake -DBUILD_TESTING=OFF
+include(CTest)
+if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 

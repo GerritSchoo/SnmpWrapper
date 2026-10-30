@@ -9,7 +9,7 @@
       "id": "preset",
       "type": "pickString",
       "description": "CMake preset",
-      "options": ["debug", "release", "shared"],
+      "options": ["debug", "release", "shared", "coverage"],
       "default": "debug"
     }
   ],
@@ -31,10 +31,18 @@
       "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
     },
     {
-      "label": "snmpwrap: test (unit + MIB only, no snmpd)",
+      "label": "snmpwrap: test (unit only, no snmpd)",
       "type": "shell",
-      "command": "bash scripts/test.sh ${input:preset} -E integration",
-      "windows": { "command": "wsl -d Ubuntu -- bash scripts/test.sh ${input:preset} -E integration" },
+      "command": "bash scripts/test.sh ${input:preset} -L unit",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/test.sh ${input:preset} -L unit" },
+      "group": "test",
+      "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
+    },
+    {
+      "label": "snmpwrap: coverage (all tests, HTML report)",
+      "type": "shell",
+      "command": "bash scripts/coverage.sh",
+      "windows": { "command": "wsl -d Ubuntu -- bash scripts/coverage.sh" },
       "group": "test",
       "problemMatcher": { "base": "$gcc", "fileLocation": "absolute" }
     },

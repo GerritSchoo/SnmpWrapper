@@ -1,0 +1,33 @@
+SPLIT-MIB DEFINITIONS ::= BEGIN
+
+-- The objects live in two unrelated OID trees (iso and joint-iso-ccitt): there is no common
+-- prefix, so the generator needs a root - and no root can lie above both.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, enterprises
+        FROM SNMPv2-SMI;
+
+splitMIB MODULE-IDENTITY
+    LAST-UPDATED "202610300000Z"
+    ORGANIZATION "snmpwrap test"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Objects without a common OID prefix."
+    REVISION     "202610300000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 322 }
+
+splitIso OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Below iso."
+    ::= { splitMIB 1 }
+
+splitJoint OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Below joint-iso-ccitt."
+    ::= { joint-iso-ccitt 999 1 }
+
+END

@@ -1,0 +1,33 @@
+MEMBER-CLASH-MIB DEFINITIONS ::= BEGIN
+
+-- The objects below { clashMIB 2 } hang off an unnamed node, which the generator names "node2" -
+-- the same C++ member as the scalar node2. The generator must refuse with a clear message.
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, enterprises
+        FROM SNMPv2-SMI;
+
+clashMIB MODULE-IDENTITY
+    LAST-UPDATED "202610300000Z"
+    ORGANIZATION "snmpwrap test"
+    CONTACT-INFO "none"
+    DESCRIPTION  "Two objects with the same C++ name."
+    REVISION     "202610300000Z"
+    DESCRIPTION  "Initial version."
+    ::= { enterprises 99999 321 }
+
+clashInner OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Below an unnamed node."
+    ::= { clashMIB 2 1 }
+
+node2 OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Same C++ member as the unnamed group { clashMIB 2 }."
+    ::= { clashMIB 3 }
+
+END

@@ -88,6 +88,7 @@ trailing `_`.
 
 ```sh
 sudo apt install build-essential cmake libsnmp-dev snmpd snmp
+sudo apt install libgtest-dev libgmock-dev    # only for snmpwrap's own tests (off: -DBUILD_TESTING=OFF)
 ```
 
 ### Build, test and install snmpwrap

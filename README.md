@@ -42,10 +42,14 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
 
 Voraussetzungen: Linux, GCC ≥ 11, CMake ≥ 3.16, Net-SNMP 5.9.x mit Entwicklungsdateien
 (`sudo apt install build-essential cmake libsnmp-dev snmpd snmp` oder ein eigener Build in `~/netsnmp`).
+Für die Tests zusätzlich GoogleTest (`sudo apt install libgtest-dev libgmock-dev`, für Coverage `lcov`);
+ohne Tests bauen: `cmake --preset debug -DBUILD_TESTING=OFF`.
 
 ```sh
 scripts/build.sh            # = cmake --preset debug && cmake --build --preset debug
 scripts/test.sh             # alle Tests, inkl. Integration gegen einen eigenen snmpd (kein root nötig)
+scripts/test.sh debug -L unit   # nur die Unit-Tests (ohne snmpd)
+scripts/coverage.sh         # alle Tests mit Coverage, HTML-Bericht in build/coverage/html/
 scripts/demo.sh             # snmpd + agent_app + client_app zum Ausprobieren
 ```
 
@@ -82,15 +86,17 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
 | `tools/mibgen/` | der Generator `snmpwrap-mibgen` (MIB → `Data`, `DataAgent`, `Remote`, `send…`) |
 | `cmake/` | `find_package`-Unterstützung, `snmpwrap_add_mib()` |
 | `examples/` | `apps/agent_app`, `apps/client_app` mit `MY-APP-MIB`, dazu das Werkzeug `client_cli` |
-| `test/` | Unit-Tests, Integrationstests gegen einen echten snmpd, Test-MIBs |
+| `test/` | GoogleTest: `unit/` (Bibliothek), `generated/` (generierter Code), `mibgen/` (Generator), `support/` (Helfer, Mocks); Integrationstests gegen einen echten snmpd, Test-MIBs |
 | `docs/GUIDE.md` | die Anleitung |
 
 ## Getestet / Grenzen
 
 * Linux (WSL2 Ubuntu 22.04, GCC 11), Net-SNMP 5.9.1. Tests (`scripts/test.sh`):
-  * Unit-Tests ohne snmpd: Index-Kodierung, GET/GETNEXT-Randfälle, RowStatus, Rollback, große Tabellen
-    (`unit`), MIB-Einlesen (`mib_model`), die generierte `Data`-Struktur samt `DataAgent`, Hooks und Validierung (`data_model`),
-    Init-Reihenfolge Agent/Client (`lifecycle_*`).
+  * Unit-Tests ohne snmpd (GoogleTest/gmock, jeder Test ein eigener CTest-Eintrag, Label `unit`): `Oid`, `Value`,
+    Index-Kodierung, `Mib` mit GET/GETNEXT-Randfällen, RowStatus, Rollback und großen Tabellen, MIB-Einlesen (`unit.*`);
+    die generierte `Data`-Struktur samt `DataAgent`, Hooks, Validierung, `Remote` gegen eine gemockte `Session` und
+    Notifications (`generated.*`); der Generator selbst mit seinen Fehlermeldungen und der Kommandozeile (`mibgen.*`);
+    Init-Reihenfolge Agent/Client (`lifecycle.*`).
   * Integration mit echtem `snmpd` für v1, v2c und v3 (noAuthNoPriv, authNoPriv): mit den Net-SNMP-Tools, `snmpwrap::Client`
     und dem generierten `Remote`; RowStatus, Mehrspalten-Index, GETBULK, Rollback, Traps (`integration`, `integration_data`)
     sowie die Beispiel-Apps (`apps`).

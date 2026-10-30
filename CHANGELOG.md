@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Changed
+- Tests run on GoogleTest / gmock (system package `libgtest-dev libgmock-dev`), one CTest entry per test, laid out like
+  the sources: `test/unit/` (library), `test/generated/` (generated code, with gmock for `Session`,
+  `NotificationSender`, `NotificationSource`), `test/mibgen/` (generator and command line, new). `ctest -L unit` runs
+  everything without snmpd.
+- Tests are switched with CTest's standard `BUILD_TESTING` (`-DBUILD_TESTING=OFF`) instead of `SNMPWRAP_BUILD_TESTS`.
+- The generator is built as the internal library `snmpwrap_mibgen_core` plus the `snmpwrap-mibgen` executable.
+
+### Added
+- Preset `coverage` and `scripts/coverage.sh`: line / branch coverage over all tests, HTML report in
+  `build/coverage/html/`.
+
 ### Fixed
 - BITS values are sent as OCTET STRING (RFC 2578 7.1.4), no longer as the SMIv1 BIT STRING. Serving a BITS object
   broke the AgentX session (AgentX has no BIT STRING type), and SETs from standard managers (`snmpset … b`) were
