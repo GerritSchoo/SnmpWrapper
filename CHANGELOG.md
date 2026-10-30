@@ -10,6 +10,13 @@
 - Tests are switched with CTest's standard `BUILD_TESTING` (`-DBUILD_TESTING=OFF`) instead of `SNMPWRAP_BUILD_TESTS`.
 - The generator is built as the internal library `snmpwrap_mibgen_core` plus the `snmpwrap-mibgen` executable.
 
+### Documentation
+- Guide: new section 11 "Everything at a glance" – every function of the agent and the client side, plus an
+  "I want to …" table. New: `Instrumentation` / `registerMib()`, decoding the row index in the hooks, `AgentConfig`,
+  the flat `mib::Client`, "Agent and client in one program" (rules and a gateway example), ending an adapter at run time.
+  Fixed a link to a test file that no longer exists.
+- The comment at the top of every generated header names all parts (it mentioned only `Instrumentation` and `Client`).
+
 ### Added
 - `Agent::removeHandler(root)` / `Agent::removeMib(mib)`: remove a subtree at run time. It is answered as non-existent at
   once; Net-SNMP / snmpd are told right away, or - from inside a callback or while a SET for it is in progress - on the

@@ -17,6 +17,9 @@ your code.
 
 The complete, tested example is [examples/apps](../examples/apps): `agent_app` and `client_app`.
 
+**Looking for what exists?** [Section 11](#11-everything-at-a-glance) lists every function of the agent and the client
+side on one page, plus an "I want to …" table. The headers have the details of each one.
+
 ---
 
 ## Contents
@@ -31,6 +34,7 @@ The complete, tested example is [examples/apps](../examples/apps): `agent_app` a
 8. [snmpd configuration and SNMP versions](#8-snmpd-configuration-and-snmp-versions)
 9. [Troubleshooting](#9-troubleshooting)
 10. [Error codes](#10-error-codes)
+11. [Everything at a glance](#11-everything-at-a-glance)
 - [Appendix A: without a MIB (core API)](#appendix-a-without-a-mib-core-api)
 
 ---
@@ -257,7 +261,8 @@ Tables are `std::map`s ordered like SNMP orders the rows. A table with a composi
   destroy; the rows appear in / disappear from the table in `data`. A row created by a manager stays `notReady` until all
   required columns were supplied.
 
-`data` and the agent must live longer than the adapter.
+`data` and the agent must live longer than the adapter. Destroying the adapter while the agent keeps running is fine:
+its subtree disappears ([section 7](#ending-an-adapter-at-run-time)).
 
 ### Reacting to changes
 
@@ -301,6 +306,25 @@ Rules:
   `adapter.lock()` inside them. Exceptions from the message hooks are ignored (the request is already committed).
 * Row creation through RowStatus is reported as the RowStatus object plus a row message; a destroyed row is reported as the
   RowStatus object and in its subtree, but not as a row.
+
+### Which row? The index in the hooks
+
+`onSet`, `onChanged` and `onGet` get the object and, for a table cell, the row index as an OID (empty for scalars).
+Every table has an index struct that turns it back into values:
+
+```cpp
+adapter.onChanged([&](mib::Object object, const snmpwrap::Oid& index) {
+    if (object == mib::Object::appSensorMode) {
+        const auto row = mib::AppSensorEntryIndex::fromOid(index);   // std::optional: which sensor?
+        std::cout << "sensor " << row->appSensorIndex << " is now "
+                  << data.appSensors.appSensorTable.at(*row).appSensorMode << "\n";
+    }
+});
+```
+
+`XyzEntryIndex` has one member per INDEX column, `toOid()` / `fromOid()` (`std::nullopt` for a malformed OID) and SNMP
+ordering. The row hooks (`on<Table>Row`) get the decoded index directly. The object OIDs themselves are in
+`mib::oids::` (`mib::oids::appSensorMode`, `mib::oids::root`, …), e.g. to compare a notification's `trapOid`.
 
 ### Checking values you set yourself
 
@@ -349,6 +373,42 @@ types and indexes have `operator<<` as well, so the maps returned by `Client` pr
 * SNMP has no floating point type: use `Integer32` with an agreed scale (e.g. tenths of a degree) or a string.
 * All rows are kept in memory.
 * Values that change on every read need `onGet`; the structure only holds what you put into it.
+
+### Data that does not live in memory: `Instrumentation`
+
+`Data` + `DataAgent` keep every value in a structure. When the values live elsewhere – a database, hardware registers, a
+table too big to copy – implement the generated interface `mib::Instrumentation` instead: one virtual function per
+object, called for every request, and register it with `mib::registerMib(agent, impl)`:
+
+```cpp
+class SensorBackend : public mib::Instrumentation {
+public:
+    std::string appName() override { return name_; }
+    void setAppName(const std::string& v) override { name_ = v; }       // the value is already checked against the MIB
+    std::int32_t appLimit() override { return limit_; }
+    void setAppLimit(std::int32_t v) override { limit_ = v; }
+    void validateAppLimit(std::int32_t v) override {                     // optional extra rule before anything is written
+        if (v < 10) throw snmpwrap::SetError(snmpwrap::ErrorStatus::WrongValue, "limit below 10");
+    }
+    std::vector<mib::AppSensorEntryIndex> appSensorTableRows() override { /* the row indexes, any order */ }
+    std::string appSensorName(const mib::AppSensorEntryIndex& i) override { /* ... */ }
+    std::int32_t appSensorTemperature(const mib::AppSensorEntryIndex& i) override { return readHardware(i.appSensorIndex); }
+    mib::AppSensorMode appSensorMode(const mib::AppSensorEntryIndex& i) override { /* ... */ }
+    void setAppSensorMode(const mib::AppSensorEntryIndex& i, mib::AppSensorMode v) override { /* ... */ }
+};
+
+SensorBackend backend;                                    // must outlive the agent
+mib::registerMib(agent, backend);                         // or mib::bind(someMib, backend)
+```
+
+* Per object: a getter, a setter for writable objects and an optional `validate<Object>()`. Throw `snmpwrap::SetError`
+  from a setter or validator to refuse the request; it is rolled back as a whole.
+* Per table: `<table>Rows()`. `<table>Next(after)` and `<table>Has(index)` have default implementations that scan
+  `<table>Rows()` – override them for big tables, so a walk does not enumerate the whole table for every step.
+* RowStatus tables add `create<Entry>(index, values)`, `destroy<Entry>(index)`, the RowStatus getter / setter and an
+  optional `<entry>Complete(index)`.
+* There are no hooks and no messages: your setters see every change directly. `Data` + `DataAgent` is itself just one
+  implementation of this interface.
 
 ---
 
@@ -402,11 +462,20 @@ cfg.privProtocol = snmpwrap::SessionConfig::PrivProtocol::AES128; cfg.privPassph
 | `snmpwrap::TransportError` | no answer (wrong address, firewall, **wrong community** – it is silently dropped), SNMPv3 failure |
 | `snmpwrap::Error` | e.g. the object or row does not exist on the agent |
 
+### Under `Remote`: the flat `mib::Client`
+
+`Remote` is built on a flat typed class, `mib::Client`: one function per object, e.g. `appName()`, `setAppName(v)`,
+`appSensorTable()` (the whole table as a map), `appSensorMode(index)`, `setAppSensorMode(index, v)`. Its `make<Object>(v)`
+returns the checked `snmpwrap::VarBind` without sending anything – the same thing `remote.appName.varbind(v)` does, for
+building requests yourself. Use whichever reads better; both check against the MIB.
+
 ### Without a MIB
 
 `snmpwrap::Client` alone works with plain OIDs on any device:
-`session.get(oid)`, `session.getNext(oid)`, `session.getBulk(oids, 0, 20)`, `session.set(oid, value)`,
-`session.set({{oid1, v1}, {oid2, v2}})` (one atomic request), `session.walk(root)` (GETBULK on v2c/v3). On v2c/v3 a missing
+`session.get(oid)`, `session.get({oid1, oid2})`, `session.getNext(oid)`, `session.getBulk(oids, 0, 20)`, `session.set(oid, value)`,
+`session.set({{oid1, v1}, {oid2, v2}})` (one atomic request), `session.walk(root)` (GETBULK on v2c/v3) and
+`session.walk(root, [](const snmpwrap::VarBind& vb) { ...; return true; })` (return `false` to stop early). Values are made
+with `snmpwrap::Value::integer(5)`, `::string("x")`, `::gauge(7)`, … and printed with `value.str()`. On v2c/v3 a missing
 object is not an exception but a value: `vb.value.isException()`. The tool [examples/client_cli.cpp](../examples/client_cli.cpp)
 shows all of it:
 
@@ -473,18 +542,69 @@ while (!g_stop && agent.poll()) {                  // waits for requests, at mos
 }
 ```
 
+`agent.poll()` connects on its first call (or call `agent.start()` yourself); `agent.run()` is the same loop without your
+own code, until `agent.stop()`. The settings of the agent:
+
+| `snmpwrap::AgentConfig` | Default | Meaning |
+|---|---|---|
+| `name` | `"snmpwrap-agent"` | name in Net-SNMP's log messages; Net-SNMP also reads `<name>.conf` if it exists |
+| `agentxSocket` | `"tcp:127.0.0.1:705"` | where snmpd listens for subagents – must match `agentXSocket` in snmpd.conf |
+| `pingIntervalSec` | `15` | AgentX ping; after a snmpd restart the agent reconnects within this time (0 = off) |
+| `logToStderr` | `true` | Net-SNMP's messages (e.g. "AgentX subagent connected") on stderr |
+| `ignoreSigpipe` | `true` | ignore SIGPIPE, so that a vanishing snmpd cannot kill the process (process-wide) |
+
 Rules (Net-SNMP keeps process-wide state):
 
 * **One `Agent` per process.** `poll()`, the adapter's hooks and `send…()` belong to the thread running the loop.
 * **Other threads** may change `data` only while holding `adapter.lock()` (a `std::unique_lock`, released at the end of its
   scope). Never keep it across `poll()`. They never call snmpwrap functions themselves – they set a flag or queue an event,
   and the loop sends the notification (see `agent_app`).
-* **Agent and client in one program:** create the `Agent` **first** (its constructor throws otherwise), use clients only from
-  the agent's thread, and never query your own agent's OIDs from that thread – the thread waits for an answer only it
-  could give (timeout). An agent and a client are best two programs, as in `examples/apps`.
+* **Agent and client in one program** works, with a few rules – see [below](#agent-and-client-in-one-program).
 * `poll(false)` returns immediately, for integration into an existing event loop. `agent.stop()` ends `poll()` / `run()`
   from another thread.
 * If snmpd restarts, the agent reconnects by itself (AgentX ping every `AgentConfig::pingIntervalSec` seconds).
+
+### Ending an adapter at run time
+
+Reconfiguration, a module that is switched off: destroy the `DataAgent` on the loop thread and keep polling. Its subtree
+disappears from snmpd (managers get noSuchObject), and nothing touches its `data` any more – a SET that is still in
+progress then fails cleanly. The `Data` and the `Agent` must outlive the adapter; a new `DataAgent` for the same MIB can
+follow right away. Without the generated code: `agent.removeMib(mib)` / `agent.removeHandler(root)`.
+
+### Agent and client in one program
+
+A typical case is a gateway: it reads values from other devices and serves them itself.
+
+```cpp
+snmpwrap::Agent agent;                          // 1. the Agent first
+mib::Data data;
+mib::DataAgent adapter(agent, data);
+
+snmpwrap::SessionConfig cfg;                    // 2. then clients - to OTHER devices
+cfg.peer = "192.168.1.20";
+cfg.timeout = std::chrono::milliseconds(500);   // a dead device blocks the loop for timeout * (retries + 1)
+cfg.retries = 0;
+snmpwrap::Client device(cfg);
+other_mib::Remote remote(device);
+
+while (agent.poll()) {
+    try {
+        data.status.temperature = remote.sensors.temperature.get();   // serve what the device reported
+    } catch (const snmpwrap::TransportError&) {
+        // device unreachable: keep the last value, keep answering our own managers
+    }
+}
+```
+
+1. **The `Agent` first**, before the first `Client` and the first `NotificationReceiver` – its constructor throws
+   otherwise (Net-SNMP is initialized once per process, and only an agent can set it up as an AgentX subagent).
+2. **One thread:** clients run in the thread that calls `poll()`.
+3. **Ask other agents, never your own OIDs through snmpd:** the thread would wait for an answer only it could give (timeout).
+4. **A client call blocks the loop** until the answer or the timeout – meanwhile the agent answers nobody. Keep `timeout`
+   and `retries` small for clients in the agent loop.
+5. **After `~Agent`** do not use the clients any more: its destructor shuts Net-SNMP down for the whole process.
+
+When none of this fits, use two programs, as in `examples/apps`.
 
 ---
 
@@ -517,8 +637,9 @@ remote.appSensors.appLimit.set(40);                     // MIB check, OID and va
 
 The agent side needs no interface: `Data` is a plain struct, and `DataAgent(snmpwrap::Mib&, Data&)` works without an
 `Agent` and without snmpd – drive it in a test through `mib.get()`, `mib.getNext()` and `mib.prepare()` (the same calls
-the agent makes), and your hooks run exactly as in production. [test/data_model_tests.cpp](../test/data_model_tests.cpp)
-does both.
+the agent makes), and your hooks run exactly as in production. snmpwrap's own tests do both:
+[test/generated/data_agent_test.cpp](../test/generated/data_agent_test.cpp) (agent side) and
+[test/generated/remote_test.cpp](../test/generated/remote_test.cpp) (`Remote` on a gmock session).
 
 ---
 
@@ -595,6 +716,99 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 | `NotWritable` | 17 | read-only object (automatic) | `noSuchName` |
 | `InconsistentName` | 18 | row does not exist and this request cannot create it (automatic) | `noSuchName` |
 | `GenErr` | 5 | anything else | `genErr` |
+
+---
+
+## 11. Everything at a glance
+
+`mib::` is the generated namespace (your module in snake_case); `<Object>`, `<Table>`, `<Group>` stand for the MIB names
+(e.g. `appSensorMode`, `appSensorTable`, `appSensors`), `<Entry>` for the table's entry type (`AppSensorEntry`).
+
+### I want to …
+
+| … | Use |
+|---|---|
+| serve values that live in my program | `mib::Data` + `mib::DataAgent adapter(agent, data)` ([4](#4-the-agent-data-and-dataagent)) |
+| serve values from a database / hardware / huge tables | implement `mib::Instrumentation`, `mib::registerMib(agent, impl)` ([4](#data-that-does-not-live-in-memory-instrumentation)) |
+| compute a value only when it is read | `adapter.onGet(f)` |
+| refuse a value a manager writes | `onSet(f)` or `validate<Object>()`: throw `snmpwrap::SetError` |
+| react when a manager changed something | `onChanged`, `on<Table>Row`, `on<Group>`, `on<ModuleNode>` – after the commit |
+| know which row a hook means | `mib::<Entry>Index::fromOid(index)` ([4](#which-row-the-index-in-the-hooks)) |
+| check my own values against the MIB | `data.validate()` |
+| log the data | `std::cout << data;` (or any group, table, row, index, enum) |
+| change data from another thread | `auto guard = adapter.lock();` |
+| switch a subtree off at run time | destroy the `DataAgent`, or `agent.removeMib(mib)` ([7](#ending-an-adapter-at-run-time)) |
+| send an event | `mib::send<Notification>(agent, …)` |
+| read one value from a device | `remote.<group>.<object>.get()` |
+| read everything at once | `remote.read()` → `mib::Data` |
+| set several values atomically | `remote.<group>.send(msg)`, `remote.<table>[i].send(row)`, `remote.change().set(…).set(…).send()` |
+| create / delete a row on a device | `remote.<table>.create(index, values)` / `.destroy(index)` (RowStatus tables) |
+| receive events | `snmpwrap::NotificationReceiver` + `mib::Notifications` ([6](#receiving-them-client-side)) |
+| talk to a device without a MIB | `snmpwrap::Client`: `get`, `getNext`, `getBulk`, `set`, `walk` |
+| test my code without network | mock `snmpwrap::Session` / `NotificationSender` / `NotificationSource` ([testing](#testing-your-application-the-interfaces-to-mock)) |
+| be an agent and a client in one program | [section 7](#agent-and-client-in-one-program) |
+
+### Agent side
+
+| Class / function | What it does |
+|---|---|
+| `snmpwrap::Agent(AgentConfig)` | the AgentX subagent; one per process, created before any `Client` / `NotificationReceiver` |
+| `agent.poll(block = true)` | answers pending requests, waits at most about 1 s; `false` once `stop()` was called |
+| `agent.run()` / `agent.stop()` | loop until `stop()` (thread- and signal-safe) |
+| `agent.start()` | connect to snmpd now (otherwise done by the first `poll()` / `run()` / `sendTrap()`) |
+| `agent.addMib(root)` / `agent.addHandler(root, handler)` | register a subtree (core API, [appendix](#appendix-a-without-a-mib-core-api)) |
+| `agent.removeMib(mib)` / `agent.removeHandler(root)` | remove a subtree at run time: noSuchObject from then on |
+| `agent.sendTrap(trapOid, varbinds)` | a notification by OID (what `send<Notification>()` calls) |
+| `mib::Data` | all values, nested like the MIB; tables are `std::map`s: `table[index]` (or a plain number) creates a row, `erase()` removes it |
+| `data.validate()` | every value against the MIB: one text per violation |
+| `operator<<` | `data`, groups, tables, rows, indexes, enums as text |
+| `mib::DataAgent(agent, data)` | serves `data`; destroying it removes the subtree again |
+| `mib::DataAgent(mib, data)` | the same on an existing `snmpwrap::Mib` (tests, custom roots) |
+| `adapter.lock()` | `std::unique_lock` for other threads that touch `data` |
+| `adapter.onSet(f)` / `onGet(f)` | `f(mib::Object, index)`: before writing (may refuse) / before reading |
+| `adapter.onChanged(f)` | `f(mib::Object, index)` per changed value, after the commit |
+| `adapter.on<Table>Row(f)` | `f(index, row)` per changed or created row, after the commit |
+| `adapter.on<Group>(f)` / `on<ModuleNode>(f)` | the subtree / the whole `Data`, once per request, after the commit |
+| `mib::Instrumentation` | interface: one getter / setter / `validate<Object>()` per object, `<table>Rows/Next/Has`, RowStatus `create/destroy<Entry>` |
+| `mib::registerMib(agent, impl)` / `mib::bind(mib, impl)` | serve an `Instrumentation` |
+| `mib::send<Notification>(agent, values…)` | typed notification; table columns add the row index |
+
+### Client side
+
+| Class / function | What it does |
+|---|---|
+| `snmpwrap::Client(SessionConfig)` | a session to one device: v1 / v2c / v3 (`peer`, `version`, `community`, `user`, `securityLevel`, `auth…`, `priv…`, `contextName`, `timeout`, `retries`) |
+| `get(oid)` / `get(oids)`, `getNext(oid)`, `getBulk(oids, nonRepeaters, maxRepetitions)` | read by OID |
+| `set(oid, value)` / `set(varbinds)` | write; several values in one atomic request |
+| `walk(root)` / `walk(root, callback)` | a whole subtree (GETBULK on v2c/v3); the callback can stop early |
+| `mib::Remote(session)` | the device, nested like `Data` |
+| `remote.<…>.<object>.get()` / `.set(v)` / `.varbind(v)` | one value; `set` checks against the MIB first; `varbind` only builds the checked varbind |
+| `remote.<table>[index]` | one row (or a plain number): cells with `get` / `set`, `read()` all columns, `send(row)` all writable columns, `index()` |
+| `remote.<table>.read()` | the whole table as `std::map<Index, Entry>` |
+| `remote.<table>.create(index, values, activate = true)` / `.destroy(index)` | RowStatus tables: `values` is `mib::<Entry>Values` (`std::optional` per column) |
+| `remote.<group>.send(msg)` / `remote.send(data)` | all writable scalars of a subtree / of the MIB in one request (tables not included) |
+| `remote.change().set(target, v)…send()` | any selection of values in one request |
+| `remote.read()` | everything in one walk, as `mib::Data` |
+| `mib::Client(session)` | the flat layer under `Remote`: `<object>()`, `set<Object>(v)`, `make<Object>(v)`, `<table>()` |
+| `snmpwrap::NotificationReceiver(address)` | listens for v1 / v2c traps and informs (acknowledges informs) |
+| `receiver.poll(timeout)` / `run()` / `stop()` | process received notifications |
+| `receiver.acceptCommunities({…})` / `onNotification(f)` | accept only these communities / untyped handler (`snmpwrap::Notification`) |
+| `mib::Notifications(receiver)` | `on<Notification>(f)` with a typed struct (`.raw`: sender, community, version, uptime, varbinds), `onOther(f)` |
+
+### Shared types
+
+| Type | What it offers |
+|---|---|
+| `mib::oids::<name>` | the OID of every MIB node; `mib::oids::root` = the registered subtree |
+| `mib::<Entry>Index` | one member per INDEX column, `toOid()`, `fromOid()`, SNMP order |
+| `mib::<Entry>`, `mib::<Entry>Values` | a row (all readable columns); the values for creating a row |
+| `enum class` per named-number type | `toString(v)`, `operator<<` (`on(1)`) |
+| `mib::Object` | every object with a value, `toString(object)`: the first parameter of the hooks |
+| `snmpwrap::Oid` | `Oid::parse("1.3.6")`, `str()`, `+`, `isPrefixOf()`, `suffixOf()`, `size()`, `[i]` |
+| `snmpwrap::Value` | `Value::integer/gauge/counter32/counter64/timeTicks/string/opaque/bits/oid/ipAddress/null(…)`, `type()`, `as…()`, `str()`, `isException()` |
+| `snmpwrap::Error` | base of all errors; `SetError(status, text)` (refuse / MIB check), `ResponseError` (`status()`, `index()`), `TransportError` |
+| `snmpwrap::MibModel` | read MIB files: `load()`, `node()`, `resolve("name.1")`, `format(varbind)`, `parseValue(name, text)`, `validate()` |
+| `snmpwrap::Mib`, `Handler` | the core under everything ([appendix](#appendix-a-without-a-mib-core-api)) |
 
 ---
 

@@ -1217,8 +1217,11 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
     w("/**");
     w(" * @brief Typed C++ interface of the MIB module " + mod.name + ".");
     w(" *");
-    w(" * Agent side: implement Instrumentation and call registerMib(agent, impl).");
-    w(" * Client side: use Client on top of an snmpwrap::Client.");
+    w(" * Agent side:  Data + DataAgent serve a structure; or implement Instrumentation and call registerMib(agent, impl)");
+    w(" *              for values that live elsewhere. Notifications: send<Name>(agent, ...).");
+    w(" * Client side: Remote (nested like Data) on top of an snmpwrap::Client; Client is the flat layer underneath.");
+    w(" *              Received notifications: Notifications on top of an snmpwrap::NotificationReceiver.");
+    w(" * Overview of everything: docs/GUIDE.md, section 11.");
     w(" * All OIDs, types, ranges, enumerations and index layouts come from the MIB.");
     w(" */");
     w("namespace " + mod.ns + " {");
