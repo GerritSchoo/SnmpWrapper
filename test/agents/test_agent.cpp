@@ -20,6 +20,8 @@ namespace {
 
 std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
 void onSignal(int) { g_stop = true; }
+std::atomic<bool> g_remove{false};  // SIGUSR1: remove the subtree at run time, keep serving the rest
+void onRemove(int) { g_remove = true; }
 
 struct Row {
     std::string name;
@@ -76,6 +78,7 @@ int main(int argc, char** argv) {
         Agent agent(config);
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
+        std::signal(SIGUSR1, onRemove);
 
         Mib& mib = agent.addMib(root);
 
@@ -236,6 +239,10 @@ int main(int argc, char** argv) {
 
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
         while (!g_stop && agent.poll()) {
+            if (g_remove.exchange(false)) {
+                agent.removeMib(mib);
+                std::cerr << "subtree removed\n";
+            }
             if (trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
                 std::lock_guard l(st.mutex);
                 agent.sendTrap(root + SubId{3} + SubId{0} + SubId{1},  // swtAlarm

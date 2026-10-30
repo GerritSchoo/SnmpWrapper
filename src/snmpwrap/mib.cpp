@@ -316,7 +316,8 @@ std::optional<VarBind> Mib::nextInTable(const Oid& key, const TableDef& def, con
         cell.table = &def;
         cell.column = &def.columns[colPos];
         cell.index = *row;
-        return VarBind{root_ + key + SubId{1} + def.columns[colPos].id + *row, fetch(cell)};
+        Value value = fetch(cell);  // first: GCC < 13 leaks the OID temporary if a later aggregate initializer throws
+        return VarBind{root_ + key + SubId{1} + def.columns[colPos].id + *row, std::move(value)};
     }
     return std::nullopt;
 }
@@ -338,7 +339,8 @@ std::optional<VarBind> Mib::getNext(const Oid& after) {
             if (rel < inst) {
                 Cell c;
                 c.scalar = it->scalar;
-                return VarBind{root_ + inst, fetch(c)};
+                Value value = fetch(c);  // first, see nextInTable()
+                return VarBind{root_ + inst, std::move(value)};
             }
         } else if (auto hit = nextInTable(it->key, *it->table, rel)) {
             return hit;

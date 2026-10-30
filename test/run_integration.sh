@@ -367,6 +367,20 @@ grep -q 'hello world\|snmpwrap' "$WORK/traps.log" && pass "notification carries 
 grep -q "SNMP v1" "$WORK/traps.log" && pass "SNMPv1 trap received (trapsink)" \
     || fail "SNMPv1 trap received" "$(cat "$WORK/traps.log" 2>/dev/null)"
 
+echo "== removing the subtree at run time (SIGUSR1: removeMib / ~DataAgent)"
+expect_contains "served before" "$(tool snmpget "$TARGET" $ROOT.1.1.0 2>&1)" "STRING"
+kill -USR1 "$AGENT_PID"
+gone=""
+for _ in $(seq 1 20); do
+    gone=$(tool snmpget "$TARGET" $ROOT.1.1.0 2>&1)
+    case "$gone" in *"No Such Object"*) break ;; esac
+    sleep 0.25
+done
+expect_contains "removed subtree: noSuchObject" "$gone" "No Such Object"
+expect_contains "nothing left to walk below the root" "$(tool snmpwalk "$TARGET" $ROOT 2>&1)" "No Such Object"
+expect_contains "rest of snmpd still answers" "$(tool snmpget "$TARGET" .1.3.6.1.2.1.1.3.0 2>&1)" "Timeticks"
+kill -0 "$AGENT_PID" 2>/dev/null && pass "agent keeps running after the removal" || fail "agent keeps running after the removal"
+
 echo "== shutdown"
 kill -TERM "$AGENT_PID" 2>/dev/null
 for _ in $(seq 1 20); do kill -0 "$AGENT_PID" 2>/dev/null || break; sleep 0.25; done

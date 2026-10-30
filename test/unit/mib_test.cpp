@@ -200,6 +200,18 @@ TEST(Mib, OtherExceptionsInTheSetterBecomeCommitFailed) {
     EXPECT_TRUE(FailsWith(trySet(m, {{kRoot + Oid({1, 0}), Value::integer(1)}}), ErrorStatus::CommitFailed, 0));
 }
 
+TEST(Mib, GetterThatThrowsDuringGetNextLeaksNothing) {  // run under the asan preset: GCC < 13 leaked the OID here
+    Mib m(kRoot);
+    m.scalar({1}, ScalarDef{Type::Integer, []() -> Value { throw Error("broken scalar"); }});
+    TableDef t;
+    t.columns = {{2, Type::Integer, Access::ReadOnly}};
+    t.rows = [] { return std::vector<Oid>{Oid({1})}; };
+    t.get = [](const Oid&, SubId) -> Value { throw Error("broken cell"); };
+    m.table(2, std::move(t));
+    EXPECT_THROW(m.getNext(kRoot), Error);                      // scalar
+    EXPECT_THROW(m.getNext(kRoot + Oid({1, 0})), Error);       // table cell
+}
+
 // --- definitions --------------------------------------------------------------------------------
 
 TEST(Mib, OverlappingOrIncompleteScalarsAreRefused) {

@@ -11,10 +11,21 @@
 - The generator is built as the internal library `snmpwrap_mibgen_core` plus the `snmpwrap-mibgen` executable.
 
 ### Added
+- `Agent::removeHandler(root)` / `Agent::removeMib(mib)`: remove a subtree at run time. It is answered as non-existent at
+  once; Net-SNMP / snmpd are told right away, or - from inside a callback or while a SET for it is in progress - on the
+  next `poll()` once that is finished.
+- Preset `asan` (AddressSanitizer + UndefinedBehaviorSanitizer) for all tests; Net-SNMP-internal leaks are suppressed
+  in `test/sanitizer/lsan.supp`.
 - Preset `coverage` and `scripts/coverage.sh`: line / branch coverage over all tests, HTML report in
   `build/coverage/html/`.
 
 ### Fixed
+- `DataAgent`: destroying it while the `Agent` keeps polling no longer leads to a use-after-free. The Agent kept the
+  registered Mib, whose callbacks pointed into the freed adapter. Now `~DataAgent` removes its subtree from the Agent
+  (managers get noSuchObject), and requests that still reach the Mib - a SET in progress, or `DataAgent(Mib&, Data&)` -
+  fail with an error instead of touching the adapter or the `Data`.
+- `Mib::getNext()` and `Client` leaked an OID when a getter threw (or a received value had an unsupported type):
+  GCC < 13 does not destroy the finished members of an aggregate when a later initializer throws (PR 66139).
 - Generator: a `--root` / `ROOT` that does not lie above every object of the module (e.g. a group inside it) is
   refused when generating. Before, the code was generated without a message; `registerMib()` / `DataAgent` then threw
   at run time, and `Remote::read()` silently missed the objects outside the root.

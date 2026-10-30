@@ -748,18 +748,21 @@ void writableScalarPaths(const Group& g, const std::string& rel, std::vector<std
 }
 
 /// Instrumentation overrides for one group: read / write the Data members under the adapter's mutex.
+/// Each one first checks alive(): after ~DataAgent the Data may be gone, so nothing touches it any more.
 /// `marks` sets the pending flags of this group and all groups above it (code).
 void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, const std::string& marks) {
     for (const MibNode* n : g.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name), m = path + memberName(n->name);
         w("    " + cppType(*n) + " " + f + "() override {");
         w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
         w("        reading(Object::" + ident(n->name) + ");");
         w("        return d." + m + ";");
         w("    }");
         if (n->writable()) {
             w("    void set" + F + "(" + paramType(*n) + " value) override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        auto& slot = d." + m + ";");
             w("        if (rollingBack) {  // the request is undone: restore, this is no change by a manager");
             w("            slot = value;");
@@ -786,12 +789,14 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
         for (const MibNode* x : t.index) indexNames.insert(x->name);
         w("    std::vector<" + t.indexType + "> " + t.rowsFn + "() override {");
         w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
         w("        std::vector<" + t.indexType + "> r;");
         w("        for (const auto& kv : " + tbl + ") r.push_back(kv.first);");
         w("        return r;");
         w("    }");
         w("    std::optional<" + t.indexType + "> " + t.nextFn + "(const snmpwrap::Oid* after) override {");
         w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
         w("        auto& rows = " + tbl + ";  // ordered like the OIDs of the indexes");
         w("        if (!after) return rows.empty() ? std::nullopt : std::optional<" + t.indexType + ">(rows.begin()->first);");
         w("        if (const auto idx = " + t.indexType + "::fromOid(*after)) {");
@@ -802,7 +807,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
         w("            if (kv.first.toOid() > *after) return kv.first;");
         w("        return std::nullopt;");
         w("    }");
-        w("    bool " + t.hasFn + "(" + ip + ") override { std::lock_guard<std::mutex> l(mu); return " + tbl + ".count(index) != 0; }");
+        w("    bool " + t.hasFn + "(" + ip + ") override { std::lock_guard<std::mutex> l(mu); alive(); return " + tbl + ".count(index) != 0; }");
         const std::string filled = "filled_" + memberName(t.table->name);
         if (t.rowStatus) {
             w("    // columns supplied for rows created by a manager (rows added by the application count as complete)");
@@ -814,12 +819,14 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             const std::string src = indexNames.count(c->name) ? "index." + ident(c->name) : tbl + ".at(index)." + ident(c->name);
             w("    " + cppType(*c) + " " + f + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        reading(Object::" + ident(c->name) + ", index.toOid());");
             w("        return " + src + ";");
             w("    }");
             if (c->writable()) {
                 w("    void set" + F + "(" + ip + ", " + paramType(*c) + " value) override {");
                 w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
                 w("        auto& slot = " + tbl + ".at(index)." + f + ";");
                 w("        if (rollingBack) {  // the request is undone: restore, this is no change by a manager");
                 w("            slot = value;");
@@ -847,6 +854,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             const std::string rs = ident(t.rowStatus->name);
             w("    void " + t.createFn + "(" + ip + ", const " + t.valuesType + "& values) override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        " + t.entryType + "& row = " + tbl + "[index];");
             w("        row = " + t.entryType + "{};");
             w("        std::set<std::string>& supplied = " + filled + "[index];");
@@ -867,6 +875,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             w("    }");
             w("    void " + t.destroyFn + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        " + tbl + ".erase(index);");
             w("        " + filled + ".erase(index);");
             w("        if (rollingBack) return;  // undoes a create of this request");
@@ -880,11 +889,13 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
             w("    }");
             w("    snmpwrap::RowStatus " + rs + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        reading(Object::" + ident(t.rowStatus->name) + ", index.toOid());");
             w("        return " + tbl + ".at(index)." + rs + ";");
             w("    }");
             w("    void set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        " + tbl + ".at(index)." + rs + " = status;");
             w("        rows_" + memberName(t.table->name) + ".insert(index);");
             w("       " + marks);
@@ -895,6 +906,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
                 if (c->defaultValue.empty()) needs += (needs.empty() ? "" : " && ") + std::string("it->second.count(\"") + c->name + "\")";
             w("    bool " + t.completeFn + "(" + ip + ") override {");
             w("        std::lock_guard<std::mutex> l(mu);");
+        w("        alive();");
             w("        const auto it = " + filled + ".find(index);");
             w("        if (it == " + filled + ".end()) return true;");
             w("        return " + (needs.empty() ? std::string("true") : needs) + ";");
@@ -1511,7 +1523,9 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w(" *     data.<group>.<object> = 42;");
         w(" * }");
         w(" * @endcode");
-        w(" * @note Data and the Agent must outlive the DataAgent. Not copyable.");
+        w(" * @note Data and the Agent must outlive the DataAgent. Destroying the DataAgent removes its subtree from the");
+        w(" *       Agent (managers get noSuchObject); with DataAgent(Mib&, Data&), requests to the Mib fail from then on.");
+        w(" *       Destroy it on the thread running the loop. Not copyable.");
         w(" */");
         w("class DataAgent {");
         w("public:");
@@ -1574,7 +1588,7 @@ std::string header(const MibModel& m, const Module& mod, const Options& o) {
         w();
         w("private:");
         w("    struct Impl;");
-        w("    std::unique_ptr<Impl> impl_;");
+        w("    std::shared_ptr<Impl> impl_;  // shared with the callbacks of the Mib");
         w("};");
         w();
 
@@ -1852,18 +1866,22 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     }
 
     // bind / registerMib
-    w("void bind(snmpwrap::Mib& mib, Instrumentation& impl) {");
+    // The lambdas copy `impl`: a plain pointer for bind(), a shared_ptr for the DataAgent, so that its Impl lives as
+    // long as the Mib that calls it (a SET request can still be in progress after ~DataAgent).
+    w("namespace {");
+    w("template <class P>  // Instrumentation* or std::shared_ptr<Instrumentation>");
+    w("void bindTo(snmpwrap::Mib& mib, const P& impl) {");
     for (const MibNode* n : mod.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name);
         w("    {  // " + n->name);
         w("        snmpwrap::ScalarDef d;");
         w("        d.type = " + typeEnum(n->type) + ";");
-        w("        d.get = [&impl] { return " + toValue(*n, "impl." + f + "()") + "; };");
+        w("        d.get = [impl] { return " + toValue(*n, "impl->" + f + "()") + "; };");
         if (n->writable()) {
-            w("        d.set = [&impl](const snmpwrap::Value& v) { impl.set" + F + "(" + fromValue(*n, "v") + "); };");
-            w("        d.validate = [&impl](const snmpwrap::Value& v) {");
+            w("        d.set = [impl](const snmpwrap::Value& v) { impl->set" + F + "(" + fromValue(*n, "v") + "); };");
+            w("        d.validate = [impl](const snmpwrap::Value& v) {");
             w("            " + checkFn(*n) + "(v);");
-            w("            impl.validate" + F + "(" + fromValue(*n, "v") + ");");
+            w("            impl->validate" + F + "(" + fromValue(*n, "v") + ");");
             w("        };");
         }
         w("        mib.scalar(rel(mib, oids::" + f + "), std::move(d));");
@@ -1878,43 +1896,43 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             cols += std::string(cols.empty() ? "" : ", ") + "{" + std::to_string(c->oid.ids().back()) + ", " + typeEnum(c->type) + ", snmpwrap::Access::" +
                     (c->writable() ? "ReadWrite" : "ReadOnly") + "}";
         w("        t.columns = {" + cols + "};");
-        w("        t.hasRow = [&impl](const snmpwrap::Oid& o) {");
+        w("        t.hasRow = [impl](const snmpwrap::Oid& o) {");
         w("            const auto i = " + t.indexType + "::fromOid(o);");
-        w("            return i && impl." + t.hasFn + "(*i);");
+        w("            return i && impl->" + t.hasFn + "(*i);");
         w("        };");
-        w("        t.nextRow = [&impl](const snmpwrap::Oid* after) -> std::optional<snmpwrap::Oid> {");
-        w("            const auto r = impl." + t.nextFn + "(after);");
+        w("        t.nextRow = [impl](const snmpwrap::Oid* after) -> std::optional<snmpwrap::Oid> {");
+        w("            const auto r = impl->" + t.nextFn + "(after);");
         w("            if (!r) return std::nullopt;");
         w("            return r->toOid();");
         w("        };");
-        w("        t.get = [&impl](const snmpwrap::Oid& o, snmpwrap::SubId col) -> snmpwrap::Value {");
+        w("        t.get = [impl](const snmpwrap::Oid& o, snmpwrap::SubId col) -> snmpwrap::Value {");
         w("            const " + t.indexType + " i = " + t.indexType + "::fromOid(o).value();");
         w("            switch (col) {");
         for (const MibNode* c : t.columns)
-            w("                case " + std::to_string(c->oid.ids().back()) + ": return " + toValue(*c, "impl." + ident(c->name) + "(i)") + ";");
+            w("                case " + std::to_string(c->oid.ids().back()) + ": return " + toValue(*c, "impl->" + ident(c->name) + "(i)") + ";");
         w("                default: break;");
         w("            }");
         w("            (void)i;");
         w("            throw snmpwrap::Error(\"" + t.table->name + ": unknown column \" + std::to_string(col));");
         w("        };");
         if (t.anyWritable()) {
-            w("        t.set = [&impl](const snmpwrap::Oid& o, snmpwrap::SubId col, const snmpwrap::Value& v) {");
+            w("        t.set = [impl](const snmpwrap::Oid& o, snmpwrap::SubId col, const snmpwrap::Value& v) {");
             w("            const " + t.indexType + " i = " + t.indexType + "::fromOid(o).value();");
             w("            switch (col) {");
             for (const MibNode* c : t.writable())
-                w("                case " + std::to_string(c->oid.ids().back()) + ": impl.set" + upperFirst(c->name) + "(i, " + fromValue(*c, "v") + "); return;");
+                w("                case " + std::to_string(c->oid.ids().back()) + ": impl->set" + upperFirst(c->name) + "(i, " + fromValue(*c, "v") + "); return;");
             w("                default: break;");
             w("            }");
             w("            throw snmpwrap::SetError(snmpwrap::ErrorStatus::NotWritable, \"" + t.table->name + ": column not writable\");");
             w("        };");
-            w("        t.validate = [&impl](const snmpwrap::Oid& o, snmpwrap::SubId col, const snmpwrap::Value& v) {");
+            w("        t.validate = [impl](const snmpwrap::Oid& o, snmpwrap::SubId col, const snmpwrap::Value& v) {");
             w("            const auto i = " + t.indexType + "::fromOid(o);");
             w("            if (!i) return;  // Mib reports malformed indexes itself");
             w("            switch (col) {");
             for (const MibNode* c : t.writable()) {
                 w("                case " + std::to_string(c->oid.ids().back()) + ":");
                 w("                    " + checkFn(*c) + "(v);");
-                w("                    impl.validate" + upperFirst(c->name) + "(*i, " + fromValue(*c, "v") + ");");
+                w("                    impl->validate" + upperFirst(c->name) + "(*i, " + fromValue(*c, "v") + ");");
                 w("                    return;");
             }
             w("                default: return;");
@@ -1928,7 +1946,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("        snmpwrap::RowStatusSpec rs;");
             w("        rs.column = " + std::to_string(t.rowStatus->oid.ids().back()) + ";");
             w("        rs.requiredColumns = {" + req + "};  // writable columns without DEFVAL");
-            w("        rs.create = [&impl](const snmpwrap::Oid& o, const std::map<snmpwrap::SubId, snmpwrap::Value>& cols) {");
+            w("        rs.create = [impl](const snmpwrap::Oid& o, const std::map<snmpwrap::SubId, snmpwrap::Value>& cols) {");
             w("            const " + t.indexType + " i = " + t.indexType + "::fromOid(o).value();");
             w("            " + t.valuesType + " values;");
             for (const MibNode* c : t.writable()) {
@@ -1947,16 +1965,16 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("                    default: break;");
             w("                }");
             w("            }");
-            w("            impl." + t.createFn + "(i, values);");
+            w("            impl->" + t.createFn + "(i, values);");
             w("        };");
-            w("        rs.destroy = [&impl](const snmpwrap::Oid& o) {");
-            w("            if (const auto i = " + t.indexType + "::fromOid(o)) impl." + t.destroyFn + "(*i);");
+            w("        rs.destroy = [impl](const snmpwrap::Oid& o) {");
+            w("            if (const auto i = " + t.indexType + "::fromOid(o)) impl->" + t.destroyFn + "(*i);");
             w("        };");
-            w("        rs.setState = [&impl](const snmpwrap::Oid& o, snmpwrap::RowStatus s) {");
-            w("            impl.set" + upperFirst(t.rowStatus->name) + "(" + t.indexType + "::fromOid(o).value(), s);");
+            w("        rs.setState = [impl](const snmpwrap::Oid& o, snmpwrap::RowStatus s) {");
+            w("            impl->set" + upperFirst(t.rowStatus->name) + "(" + t.indexType + "::fromOid(o).value(), s);");
             w("        };");
-            w("        rs.state = [&impl](const snmpwrap::Oid& o) { return impl." + ident(t.rowStatus->name) + "(" + t.indexType + "::fromOid(o).value()); };");
-            w("        rs.complete = [&impl](const snmpwrap::Oid& o) { return impl." + t.completeFn + "(" + t.indexType + "::fromOid(o).value()); };");
+            w("        rs.state = [impl](const snmpwrap::Oid& o) { return impl->" + ident(t.rowStatus->name) + "(" + t.indexType + "::fromOid(o).value()); };");
+            w("        rs.complete = [impl](const snmpwrap::Oid& o) { return impl->" + t.completeFn + "(" + t.indexType + "::fromOid(o).value()); };");
             w("        t.rowStatus = std::move(rs);");
         }
         w("        mib.table(rel(mib, oids::" + ident(t.table->name) + "), std::move(t));");
@@ -1965,6 +1983,9 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
     w("    (void)mib;");
     w("    (void)impl;");
     w("}");
+    w("}  // namespace");
+    w();
+    w("void bind(snmpwrap::Mib& mib, Instrumentation& impl) { bindTo(mib, &impl); }");
     w();
     if (mod.hasRoot) {
         w("snmpwrap::Mib& registerMib(snmpwrap::Agent& agent, Instrumentation& impl) {");
@@ -2209,6 +2230,14 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    SetHook hook;");
         w("    GetHook getHook;");
         w("    bool rollingBack = false;  // from Mib::onUndo until the end of the request: setters restore old values");
+        w("    // Set by ~DataAgent. The Mib keeps this object alive (a SET can still be in progress), but the Data");
+        w("    // may already be destroyed: every access fails from now on, and the request with it.");
+        w("    bool detached = false;");
+        w("    snmpwrap::Agent* agent = nullptr;  // set when the DataAgent registered its own Mib: removed by ~DataAgent");
+        w("    snmpwrap::Mib* mib = nullptr;");
+        w("    void alive() const {");
+        w("        if (detached) throw snmpwrap::Error(\"" + mod.ns + "::DataAgent was destroyed: its Data is no longer served\");");
+        w("    }");
         w("    void undoStart() noexcept {");
         w("        std::lock_guard<std::mutex> l(mu);");
         w("        rollingBack = true;");
@@ -2255,7 +2284,7 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
             w("    }");
             w("    void requestEnd(bool committed) noexcept {");
             w("        std::lock_guard<std::mutex> l(mu);");
-            w("        if (committed) {");
+            w("        if (committed && !detached) {  // no messages about a Data that may be gone");
             w("            std::set<std::pair<Object, snmpwrap::Oid>> seen;");
             w("            for (const auto& c : changes)");
             w("                if (changedHook && seen.insert(c).second) quietly([&] { changedHook(c.first, c.second); });");
@@ -2342,19 +2371,42 @@ std::string source(const MibModel& m, const Module& mod, const Options& o) {
         w("    return d;");
         w("}");
         w();
-        w("DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_unique<Impl>(data)) {");
-        w("    snmpwrap::Mib& mib = registerMib(agent, *impl_);");
-        w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
-        w("    mib.onUndo([impl = impl_.get()] { impl->undoStart(); });");
+        // the Mib's callbacks share the Impl: it lives as long as the Mib, also after ~DataAgent (see Impl::detached)
+        w("namespace {");
+        w("template <class I>");
+        w("void attach(snmpwrap::Mib& mib, const std::shared_ptr<I>& impl) {");
+        w("    bindTo(mib, std::shared_ptr<Instrumentation>(impl));");
+        w("    mib.onRequestEnd([impl](bool committed) { impl->requestEnd(committed); });");
+        w("    mib.onUndo([impl] { impl->undoStart(); });");
+        w("}");
+        w("}  // namespace");
+        w();
+        w("DataAgent::DataAgent(snmpwrap::Agent& agent, Data& data) : impl_(std::make_shared<Impl>(data)) {");
+        w("    snmpwrap::Mib& mib = agent.addMib(oids::root);");
+        w("    try {");
+        w("        attach(mib, impl_);");
+        w("    } catch (...) {");
+        w("        agent.removeMib(mib);  // no half-registered subtree");
+        w("        throw;");
+        w("    }");
+        w("    impl_->agent = &agent;");
+        w("    impl_->mib = &mib;");
         w("}");
         w();
-        w("DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_unique<Impl>(data)) {");
-        w("    bind(mib, *impl_);");
-        w("    mib.onRequestEnd([impl = impl_.get()](bool committed) { impl->requestEnd(committed); });");
-        w("    mib.onUndo([impl = impl_.get()] { impl->undoStart(); });");
-        w("}");
+        w("DataAgent::DataAgent(snmpwrap::Mib& mib, Data& data) : impl_(std::make_shared<Impl>(data)) { attach(mib, impl_); }");
         w();
-        w("DataAgent::~DataAgent() = default;");
+        w("DataAgent::~DataAgent() {");
+        w("    {");
+        w("        std::lock_guard<std::mutex> l(impl_->mu);");
+        w("        impl_->detached = true;  // from now on nothing touches the Data any more");
+        w("    }");
+        w("    if (impl_->agent) {");
+        w("        try {");
+        w("            impl_->agent->removeMib(*impl_->mib);  // managers get noSuchObject");
+        w("        } catch (...) {  // a destructor must not throw");
+        w("        }");
+        w("    }");
+        w("}");
         w();
         w("std::unique_lock<std::mutex> DataAgent::lock() { return std::unique_lock<std::mutex>(impl_->mu); }");
         w();

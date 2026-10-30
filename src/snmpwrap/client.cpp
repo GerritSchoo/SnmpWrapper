@@ -83,8 +83,10 @@ struct Client::Impl {
                                 std::string("agent returned error: ") + snmp_errstring(static_cast<int>(resp->errstat)));
 
         std::vector<VarBind> out;
-        for (auto* v = resp->variables; v; v = v->next_variable)
-            out.push_back({detail::fromNetOid(v->name, v->name_length), detail::fromVar(v)});
+        for (auto* v = resp->variables; v; v = v->next_variable) {
+            Value value = detail::fromVar(v);  // first: GCC < 13 leaks the OID if a later aggregate initializer throws
+            out.push_back({detail::fromNetOid(v->name, v->name_length), std::move(value)});
+        }
         // GET / GETNEXT / SET answer with exactly the varbinds of the request (RFC 3416 4.2); callers rely on it
         if (pduType != SNMP_MSG_GETBULK && out.size() != in.size())
             throw Error("agent " + config.peer + " answered " + std::to_string(out.size()) + " varbinds to a request with " +

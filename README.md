@@ -50,6 +50,7 @@ scripts/build.sh            # = cmake --preset debug && cmake --build --preset d
 scripts/test.sh             # alle Tests, inkl. Integration gegen einen eigenen snmpd (kein root nötig)
 scripts/test.sh debug -L unit   # nur die Unit-Tests (ohne snmpd)
 scripts/coverage.sh         # alle Tests mit Coverage, HTML-Bericht in build/coverage/html/
+scripts/test.sh asan        # alle Tests mit AddressSanitizer / UBSan (Speicherfehler, undefiniertes Verhalten)
 scripts/demo.sh             # snmpd + agent_app + client_app zum Ausprobieren
 ```
 

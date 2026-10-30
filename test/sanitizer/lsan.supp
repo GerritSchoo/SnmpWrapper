@@ -1,0 +1,3 @@
+# LeakSanitizer suppressions for the asan preset: leaks inside Net-SNMP itself, not in snmpwrap.
+# parse.c (Net-SNMP 5.9.1) does not free the OID labels of a MIB it fails to parse.
+leak:libnetsnmp

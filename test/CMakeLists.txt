@@ -2,6 +2,7 @@
 #   unit/       - library parts without snmpd (Oid, Value, index codec, Mib, RowStatus, MibModel)
 #   generated/  - the code snmpwrap-mibgen generates (Data, DataAgent, Remote, notifications, text output)
 #   mibgen/     - the generator itself (generate(), its refusals, the command line)
+#   agent/      - Agent: registering and removing subtrees (no snmpd: the Agent never connects)
 #   lifecycle   - Agent / Client construction order (each case in a child process)
 #   integration - against a real snmpd (run_integration.sh, run_apps.sh)
 # The GoogleTest suites are registered test by test (gtest_discover_tests): `ctest -L unit` runs them all.
@@ -60,6 +61,10 @@ if(SNMPWRAP_BUILD_MIBGEN)
         generated/notifications_test.cpp
         generated/text_output_test.cpp)
     target_link_libraries(snmpwrap_generated_tests PRIVATE nested_test_mib nested_group_mib snmpwrapper_test_mib keyword_mib)
+
+    # Agent: register / remove subtrees, also through DataAgent (an Agent per test, never connected)
+    snmpwrap_gtest(snmpwrap_agent_tests agent agent/agent_test.cpp)
+    target_link_libraries(snmpwrap_agent_tests PRIVATE snmpwrapper_test_mib)
 
     snmpwrap_gtest(snmpwrap_mibgen_tests mibgen mibgen/generator_test.cpp)
     target_link_libraries(snmpwrap_mibgen_tests PRIVATE snmpwrap_mibgen_core)

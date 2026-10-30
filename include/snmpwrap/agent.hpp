@@ -52,7 +52,7 @@ struct AgentConfig {
  *
  * @note Net-SNMP keeps process-wide state:
  *       - only ONE Agent may exist per process at a time;
- *       - run(), poll(), addHandler(), addMib() and sendTrap() belong to the single thread running
+ *       - run(), poll(), addHandler(), addMib(), removeHandler(), removeMib() and sendTrap() belong to the single thread running
  *         the loop, and all Handler / Mib callbacks are called from that thread – protect data that
  *         other threads touch with a mutex; stop() is the only thread- and signal-safe member;
  *       - with snmpwrap::Client in the same process, construct the Agent FIRST (the constructor
@@ -94,6 +94,25 @@ public:
      * @throws Error as addHandler().
      */
     Mib& addMib(const Oid& root);
+
+    /**
+     * @brief Removes the handler registered at @p root: managers get noSuchObject for the subtree from now on.
+     * @param[in] root The root passed to addHandler() / addMib().
+     * @throws Error if no handler is registered at @p root (or it was removed already).
+     * @note The subtree is answered as non-existent at once, and Net-SNMP (and with it snmpd) is told right away.
+     *       Two cases wait for the next poll() / run() iteration: a call from inside a Handler / Mib callback, and
+     *       a SET request for the subtree that is still in progress (AgentX delivers its phases separately) - the
+     *       handler is kept alive until it is finished. Like addHandler(), call it on the thread running the loop.
+     */
+    void removeHandler(const Oid& root);
+
+    /**
+     * @brief Removes a Mib created by addMib() (see removeHandler()).
+     * @param[in] mib The Mib.
+     * @throws Error if @p mib was not created by this Agent or was removed already.
+     * @note Do not use @p mib afterwards; it is destroyed once Net-SNMP was told.
+     */
+    void removeMib(const Mib& mib);
 
     /**
      * @brief Connects to the master agent (idempotent).

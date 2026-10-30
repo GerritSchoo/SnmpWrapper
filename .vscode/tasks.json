@@ -9,7 +9,7 @@
       "id": "preset",
       "type": "pickString",
       "description": "CMake preset",
-      "options": ["debug", "release", "shared", "coverage"],
+      "options": ["debug", "release", "shared", "coverage", "asan"],
       "default": "debug"
     }
   ],

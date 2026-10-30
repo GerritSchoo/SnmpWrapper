@@ -2,8 +2,10 @@
 // BITS from SNMPWRAPPER-TEST-MIB). No snmpd: the adapter is bound to a plain snmpwrap::Mib and driven like
 // the agent does (prepare -> apply -> commit / undo).
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -373,6 +375,63 @@ TEST_F(DataAgentMessagesTest, RowStatusCreateIsARowMessageDestroyIsNot) {
     log.clear();
     ASSERT_TRUE(Succeeds(trySet(mib, {{cell(m::oids::extendedPitchStatus, idx), Value::integer(6)}})));
     EXPECT_EQ(log, (std::vector<std::string>{"value extendedPitchStatus@1.3.97.102.116", "attitude rows=2", "ownboat aurora"}));
+}
+
+// --- lifetime: the Mib outlives the DataAgent --------------------------------------------------
+// The Agent keeps its Mib registered, and AgentX delivers the phases of a SET as separate messages: requests can
+// reach the Mib after ~DataAgent. They must fail cleanly - no access to the freed adapter or to a gone Data.
+
+TEST(DataAgentLifetime, RequestsAfterTheDestructionFailInsteadOfCrashing) {
+    m::Data data = validData();
+    Mib mib{m::oids::root};
+    {
+        m::DataAgent adapter{mib, data};
+        ASSERT_EQ(mib.get(scalar(m::oids::boatName)), Value::string("aurora"));
+    }
+    try {
+        mib.get(scalar(m::oids::boatName));
+        FAIL() << "GET after ~DataAgent did not fail";
+    } catch (const Error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("DataAgent was destroyed"));
+    }
+    EXPECT_THROW(mib.getNext(m::oids::root), Error);
+    EXPECT_TRUE(trySet(mib, {{scalar(m::oids::boatName), Value::string("late")}}));  // refused
+    EXPECT_EQ(data.boatName, "aurora");
+}
+
+TEST(DataAgentLifetime, SetInProgressFailsInTheApplyPhase) {
+    m::Data data = validData();
+    Mib mib{m::oids::root};
+    auto adapter = std::make_unique<m::DataAgent>(mib, data);
+    int changed = 0;
+    adapter->onChanged([&](m::Object, const Oid&) { ++changed; });
+
+    auto txn = mib.prepare({{scalar(m::oids::boatName), Value::string("late")}});  // RESERVE: adapter alive
+    adapter.reset();                                                              // ... then it is destroyed
+    try {
+        txn->apply();
+        FAIL() << "apply after ~DataAgent did not fail";
+    } catch (const SetError& e) {
+        EXPECT_EQ(e.status(), ErrorStatus::CommitFailed);
+    }
+    txn->undo();
+    EXPECT_EQ(data.boatName, "aurora");
+    EXPECT_EQ(changed, 0);
+}
+
+TEST(DataAgentLifetime, CommitAfterTheDestructionReportsNothing) {
+    m::Data data = validData();
+    Mib mib{m::oids::root};
+    auto adapter = std::make_unique<m::DataAgent>(mib, data);
+    int changed = 0;
+    adapter->onChanged([&](m::Object, const Oid&) { ++changed; });
+
+    auto txn = mib.prepare({{scalar(m::oids::boatName), Value::string("orca")}});
+    txn->apply();      // written while the adapter is alive
+    adapter.reset();   // destroyed between the ACTION and the COMMIT message
+    txn->commit();     // no messages about a Data the application may have destroyed meanwhile
+    EXPECT_EQ(changed, 0);
+    EXPECT_EQ(data.boatName, "orca");
 }
 
 // --- other MIBs ---------------------------------------------------------------------------------

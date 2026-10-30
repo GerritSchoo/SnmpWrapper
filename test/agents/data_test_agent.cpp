@@ -3,6 +3,8 @@
 //
 //   data_test_agent [--socket <agentx>] [--trap-every <s>] [--big-table <rows>]
 //
+// SIGUSR1 destroys the DataAgent while the loop keeps polling: its subtree must vanish (noSuchObject), not crash.
+//
 // The application only fills snmpwrapper_test_mib::Data; no OIDs, callbacks per object or index handling appear here.
 // The two hooks cover what a plain structure cannot do by itself: values computed on read (counter, gauge, uptime)
 // and the injected "commitfail" error.
@@ -12,6 +14,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "snmpwrapper_test_mib.hpp"
@@ -22,6 +25,8 @@ namespace {
 
 std::atomic<bool> g_stop{false};  // set by the signal handler, checked by the main loop
 void onSignal(int) { g_stop = true; }
+std::atomic<bool> g_remove{false};  // SIGUSR1: destroy the DataAgent
+void onRemove(int) { g_remove = true; }
 
 }  // namespace
 
@@ -45,6 +50,7 @@ int main(int argc, char** argv) {
         snmpwrap::Agent agent(config);
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
+        std::signal(SIGUSR1, onRemove);
 
         // --- the application's data ---------------------------------------------------------------------
         Data data;
@@ -66,9 +72,10 @@ int main(int argc, char** argv) {
         };
 
         // --- serve it ------------------------------------------------------------------------------------
-        DataAgent adapter(agent, data);
+        std::optional<DataAgent> adapter;  // optional only so that SIGUSR1 can end it before the loop does
+        adapter.emplace(agent, data);
 
-        adapter.onGet([&](Object object, const snmpwrap::Oid&) {  // values computed when they are read
+        adapter->onGet([&](Object object, const snmpwrap::Oid&) {  // values computed when they are read
             switch (object) {
                 case Object::swtCounter: ++data.swtScalars.swtCounter; break;
                 case Object::swtGauge: data.swtScalars.swtGauge = seconds() % 100; break;
@@ -76,7 +83,7 @@ int main(int argc, char** argv) {
                 default: break;
             }
         });
-        adapter.onSet([&](Object object, const snmpwrap::Oid& index) {  // a manager changed something
+        adapter->onSet([&](Object object, const snmpwrap::Oid& index) {  // a manager changed something
             std::string written;
             switch (object) {
                 case Object::swtEntryName: written = data.swtTable.at(*SwtEntryIndex::fromOid(index)).swtEntryName; break;
@@ -90,11 +97,15 @@ int main(int argc, char** argv) {
         agent.start();
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
         while (!g_stop && agent.poll()) {
-            if (trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
+            if (g_remove.exchange(false) && adapter) {
+                adapter.reset();
+                std::cerr << "DataAgent destroyed\n";
+            }
+            if (adapter && trapEvery > 0 && std::chrono::steady_clock::now() >= nextTrap) {
                 std::string name;
                 std::int32_t limit = 0;
                 {
-                    auto guard = adapter.lock();
+                    auto guard = adapter->lock();
                     name = data.swtScalars.swtName;
                     limit = data.swtScalars.swtLimit;
                 }

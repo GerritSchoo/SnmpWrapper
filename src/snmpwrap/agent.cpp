@@ -4,6 +4,7 @@
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <memory>
@@ -18,15 +19,28 @@ namespace {
 
 std::atomic<bool> g_agentExists{false};
 
+/// > 0 while Net-SNMP is inside dispatch(): unregistering a handler then would pull it from under the request.
+int g_dispatchDepth = 0;
+
 /// Per registered subtree; pointer is stored in the net-snmp handler (`myvoid`).
 struct Registration {
     Oid root;
     std::shared_ptr<Handler> handler;
+    netsnmp_handler_registration* nreg = nullptr;  // owned by Net-SNMP while registered
+    int pendingSets = 0;   // TxnHolders alive: SET requests in progress (AgentX sends their phases as separate PDUs)
+    bool removed = false;  // removeHandler(): answered as non-existent; unregistered once nothing refers to it
 };
 
 /// Transaction state of one SET request for one registration. Attached to the agent request info
 /// (it lives across the RESERVE1 / ACTION / COMMIT / UNDO phases) and freed together with it.
+/// Keeps the registration (and so the handler the transaction refers to) from being unregistered meanwhile.
 struct TxnHolder {
+    explicit TxnHolder(Registration& r) : reg(r) { ++reg.pendingSets; }
+    ~TxnHolder() { --reg.pendingSets; }
+    TxnHolder(const TxnHolder&) = delete;
+    TxnHolder& operator=(const TxnHolder&) = delete;
+
+    Registration& reg;
     std::unique_ptr<SetTransaction> txn;
 };
 
@@ -112,7 +126,7 @@ void doSet(Registration& reg, int mode, netsnmp_agent_request_info* ari, netsnmp
                     netsnmp_set_request_error(ari, requests, SNMP_ERR_GENERR);
                     return;
                 }
-                auto holder = std::make_unique<TxnHolder>();
+                auto holder = std::make_unique<TxnHolder>(reg);
                 holder->txn = std::move(txn);
                 netsnmp_data_list* node = netsnmp_create_data_list(key.c_str(), holder.get(), freeTxnHolder);
                 if (!node) {
@@ -149,10 +163,29 @@ void doSet(Registration& reg, int mode, netsnmp_agent_request_info* ari, netsnmp
     }
 }
 
+/// A removed subtree that Net-SNMP still routes to (see Registration::removed): it no longer exists.
+/// SET phases after RESERVE1 still run for requests that were in progress when it was removed.
+bool answerRemoved(int mode, netsnmp_agent_request_info* ari, netsnmp_request_info* requests) {
+    switch (mode) {
+        case MODE_GET:
+            for (auto* r = requests; r; r = r->next)
+                if (!r->processed) netsnmp_set_request_error(ari, r, SNMP_NOSUCHOBJECT);
+            return true;
+        case MODE_GETNEXT: return true;  // untouched: the agent core continues with the next subtree
+        case MODE_SET_RESERVE1: netsnmp_set_request_error(ari, requests, SNMP_ERR_NOCREATION); return true;
+        default: return false;
+    }
+}
+
 // Exceptions must never propagate through net-snmp's C frames.
 int dispatch(netsnmp_mib_handler* nh, netsnmp_handler_registration*, netsnmp_agent_request_info* ari,
              netsnmp_request_info* requests) {
     auto& reg = *static_cast<Registration*>(nh->myvoid);
+    struct Depth {
+        Depth() { ++g_dispatchDepth; }
+        ~Depth() { --g_dispatchDepth; }
+    } depth;
+    if (reg.removed && answerRemoved(ari->mode, ari, requests)) return SNMP_ERR_NOERROR;
     try {
         switch (ari->mode) {
             case MODE_GET: doGet(reg, ari, requests); break;
@@ -183,6 +216,22 @@ struct Agent::Impl {
     bool agentInitialized = false;
     std::vector<std::unique_ptr<Registration>> registrations;
     std::vector<std::shared_ptr<Mib>> mibs;
+
+    /// Unregisters removed subtrees from Net-SNMP, unless a request is being processed or still refers to them.
+    void flushRemovals() {
+        if (g_dispatchDepth > 0) return;
+        for (auto it = registrations.begin(); it != registrations.end();) {
+            Registration& r = **it;
+            if (!r.removed || r.pendingSets > 0) {
+                ++it;
+                continue;
+            }
+            netsnmp_unregister_handler(r.nreg);  // also tells the master (AgentX unregister); frees nreg
+            mibs.erase(std::remove_if(mibs.begin(), mibs.end(), [&](const auto& m) { return m.get() == r.handler.get(); }),
+                       mibs.end());
+            it = registrations.erase(it);
+        }
+    }
 };
 
 Agent::Agent(AgentConfig config) : impl_(std::make_unique<Impl>()) {
@@ -221,6 +270,7 @@ Agent::~Agent() {
 void Agent::addHandler(const Oid& root, std::shared_ptr<Handler> handler) {
     if (!handler) throw Error("null handler");
     if (root.empty()) throw Error("empty root OID");
+    impl_->flushRemovals();  // a subtree removed just before can be registered again
 
     auto reg = std::make_unique<Registration>(Registration{root, std::move(handler)});
     auto name = detail::toNetOid(root);
@@ -233,7 +283,24 @@ void Agent::addHandler(const Oid& root, std::shared_ptr<Handler> handler) {
 
     const int rc = netsnmp_register_handler(nreg);  // net-snmp owns nreg from here on
     if (rc != MIB_REGISTERED_OK) throw Error("registering " + root.str() + " failed (code " + std::to_string(rc) + ")");
+    reg->nreg = nreg;
     impl_->registrations.push_back(std::move(reg));
+}
+
+void Agent::removeHandler(const Oid& root) {
+    auto& regs = impl_->registrations;
+    auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed && r->root == root; });
+    if (it == regs.end()) throw Error("no handler registered at " + root.str());
+    (*it)->removed = true;
+    impl_->flushRemovals();
+}
+
+void Agent::removeMib(const Mib& mib) {
+    auto& regs = impl_->registrations;
+    auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed && r->handler.get() == &mib; });
+    if (it == regs.end()) throw Error("Mib at " + mib.root().str() + " was not created by this Agent (or is removed already)");
+    (*it)->removed = true;
+    impl_->flushRemovals();
 }
 
 Mib& Agent::addMib(const Oid& root) {
@@ -253,6 +320,7 @@ void Agent::start() {
 bool Agent::poll(bool block) {
     start();
     if (!impl_->running) return false;
+    impl_->flushRemovals();
     // blocking waits at most until the next alarm: the 1 s heartbeat (or an earlier net-snmp timer)
     agent_check_and_process(block ? 1 : 0);
     return impl_->running;
@@ -260,7 +328,10 @@ bool Agent::poll(bool block) {
 
 void Agent::run() {
     start();
-    while (impl_->running) agent_check_and_process(1);
+    while (impl_->running) {
+        impl_->flushRemovals();
+        agent_check_and_process(1);
+    }
 }
 
 void Agent::stop() noexcept { impl_->running = false; }
