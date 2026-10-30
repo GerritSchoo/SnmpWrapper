@@ -21,6 +21,8 @@
 - `SessionConfig::localAddress`: a client's own source address ("192.168.1.5" or "192.168.1.5:5000", IPv6 as
   "[fe80::1]:5000") for hosts with several interfaces. UDP only (refused with a TCP peer); an address that is not this
   host's, or a port in use, is a `TransportError`. Set for that one `Client` only.
+- Guide section 8: where every address and port is set (agent, snmpd, client, receiver), what snmpd.conf must contain and
+  what it can contain (access, v3 users, views, notification destinations, AgentX timeouts), running snmpd without root.
 - `Agent::removeHandler(root)` / `Agent::removeMib(mib)`: remove a subtree at run time. It is answered as non-existent at
   once; Net-SNMP / snmpd are told right away, or - from inside a callback or while a SET for it is in progress - on the
   next `poll()` once that is finished.

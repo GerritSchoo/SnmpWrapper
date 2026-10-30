@@ -442,6 +442,7 @@ cfg.peer = "192.168.1.10";                  // port 161 by default; "host:port" 
 cfg.community = "public";                   // v2c (default); cfg.version = SessionConfig::Version::V1 for v1
 cfg.timeout = std::chrono::milliseconds(2000);
 cfg.retries = 1;
+cfg.localAddress = "192.168.1.5";           // optional own source address (UDP), see section 8
 
 // SNMPv3
 cfg.version = snmpwrap::SessionConfig::Version::V3;
@@ -600,8 +601,9 @@ while (agent.poll()) {
    otherwise (Net-SNMP is initialized once per process, and only an agent can set it up as an AgentX subagent).
 2. **One thread:** clients run in the thread that calls `poll()`.
 3. **Ask other agents, never your own OIDs through snmpd:** the thread would wait for an answer only it could give (timeout).
-4. **A client call blocks the loop** until the answer or the timeout – meanwhile the agent answers nobody. Keep `timeout`
-   and `retries` small for clients in the agent loop.
+4. **A client call blocks the loop** until the answer or the timeout – meanwhile the agent answers nobody, and snmpd
+   gives up on it after `agentXTimeout` (1 s by default, [section 8](#snmpdconf-what-you-can-set)). Keep `timeout` and
+   `retries` small for clients in the agent loop.
 5. **After `~Agent`** do not use the clients any more: its destructor shuts Net-SNMP down for the whole process.
 
 When none of this fits, use two programs, as in `examples/apps`.
@@ -645,21 +647,97 @@ the agent makes), and your hooks run exactly as in production. snmpwrap's own te
 
 ## 8. snmpd configuration and SNMP versions
 
-For the agent, SNMP versions are purely a matter of snmpd – your code is the same for all of them:
+Your agent program opens no network port for managers: **snmpd** does. Your agent only talks to snmpd, locally:
 
 ```
-# /etc/snmp/snmpd.conf  (or a private file: snmpd -f -C -c my.conf, no root needed for ports > 1024)
+ manager ──── UDP 161 (agentaddress) ───► snmpd ◄── AgentX tcp:127.0.0.1:705 ──► your agent
+    ▲                                        │      (agentXSocket = AgentConfig::agentxSocket)
+    └──── notifications (trap2sink …) ───────┘
+```
+
+### Addresses and ports: what is set where
+
+| What | Where | Example |
+|---|---|---|
+| where managers reach your agent (your IP and port) | `snmpd.conf`: `agentaddress` | `agentaddress udp:192.168.1.10:161` |
+| who may read / write (the managers' IPs) | `snmpd.conf`: `rocommunity` / `rwcommunity` *SOURCE* | `rocommunity public 192.168.1.0/24` |
+| agent ↔ snmpd (local) | `AgentConfig::agentxSocket` **and** `snmpd.conf`: `agentXSocket` – the same value | `tcp:127.0.0.1:705` |
+| where notifications go | `snmpd.conf`: `trap2sink` / `trapsink` / `informsink` / `trapsess` | `trap2sink 192.168.1.50:1162 public` |
+| which device a client talks to | `SessionConfig::peer` | `"192.168.1.20"`, `"192.168.1.20:11161"`, `"tcp:192.168.1.20"` |
+| a client's own (source) address | `SessionConfig::localAddress` (UDP only) | `"192.168.1.5"`, `"192.168.1.5:5000"` |
+| where you receive notifications | `NotificationReceiver(address)` | `"udp:0.0.0.0:1162"`, `"udp:192.168.1.5:162"` |
+
+Ports below 1024 (161, 162) need root – for snmpd as for the `NotificationReceiver`.
+
+A client's source address is normally picked by the operating system: the address of the interface towards the device, and
+a free port. Set `localAddress` only on hosts with several interfaces when the device or a firewall accepts one source
+address; an address that is not one of this host's, or a port in use, is a `TransportError` when the `Client` is created.
+
+### snmpd.conf: what you must set
+
+A complete file for an agent that serves your MIB to v2c and v3 managers – the essentials are the first four blocks:
+
+```
+# where managers reach snmpd (default without this line: udp:161 on every interface)
+agentaddress udp:161
+
+# AgentX: snmpd is the master, your agent connects here (= AgentConfig::agentxSocket)
 master agentx
-agentXSocket tcp:127.0.0.1:705            # = AgentConfig::agentxSocket
+agentXSocket tcp:127.0.0.1:705
 
-rocommunity public  192.168.1.0/24       # v1 / v2c read
-rwcommunity private 127.0.0.1            # v1 / v2c read-write
+# access, v1 / v2c: community, allowed source addresses, optionally only your subtree
+rocommunity public  192.168.1.0/24
+rwcommunity private 192.168.1.50     .1.3.6.1.4.1.99999
 
-createUser monitor SHA "authpass123"                     # v3, passphrases: at least 8 characters
+# access, v3: users (passphrases: at least 8 characters) and their rights
+createUser monitor SHA "authpass123"
 createUser admin   SHA "authpass123" AES "privpass123"
 rouser monitor auth
 rwuser admin   priv
+
+# optional: where notifications go, and the system group
+trap2sink 192.168.1.50:1162 public
+sysLocation server room 2
+sysContact  ops@example.com
 ```
+
+| Setting | Required? | What happens without it |
+|---|---|---|
+| `master agentx` | **yes** | snmpd accepts no subagent – your agent never connects |
+| `agentXSocket` | **yes** (or both sides use snmpd's default Unix socket `/var/agentx/master`) | the agent connects to an address snmpd does not listen on; `AgentConfig::agentxSocket` defaults to `tcp:127.0.0.1:705` |
+| at least one `rocommunity` / `rwcommunity` / `rouser` / `rwuser` | **yes** | every request is refused; for SETs a `rw…` line |
+| `agentaddress` | only if the default `udp:161` does not fit | snmpd listens on UDP 161 of every interface (needs root) |
+
+### snmpd.conf: what you can set
+
+| Setting | Use it to |
+|---|---|
+| `agentaddress udp:IP:PORT[,tcp:…]` | listen on one interface, another port, also TCP; several comma-separated |
+| `rocommunity COMMUNITY [SOURCE [OID \| -V VIEW]]` | v1/v2c read access; *SOURCE* = host, network (`192.168.1.0/24`) or `default`; *OID* limits it to a subtree |
+| `rwcommunity …` | the same with write access (SET) |
+| `rocommunity6` / `rwcommunity6` | the same for IPv6 sources |
+| `createUser NAME [SHA\|MD5 AUTHPASS [AES\|DES PRIVPASS]]` | an SNMPv3 user (SHA-2 / AES-256 need a Net-SNMP built with OpenSSL) |
+| `rouser NAME [noauth\|auth\|priv [OID \| -V VIEW]]` / `rwuser …` | rights of a v3 user, with the minimum security level |
+| `view NAME included\|excluded OID [MASK]` | named views, used with `-V NAME` above, e.g. "everything except …" |
+| `trap2sink HOST[:PORT] COMMUNITY` | SNMPv2c traps to a receiver |
+| `trapsink HOST[:PORT] COMMUNITY` | SNMPv1 traps (converted from your v2 notification automatically) |
+| `informsink HOST[:PORT] COMMUNITY` | SNMPv2c informs: acknowledged, repeated until they are |
+| `trapsess -v3 -u USER -l LEVEL -a SHA -A PASS … HOST` | SNMPv3 notifications |
+| `trapsink -s SRC …` | the source address snmpd sends notifications from |
+| `trapcommunity STRING` | default community for the sink lines without one |
+| `sysLocation`, `sysContact`, `sysName` | the values of the standard system group |
+| `agentXPerms SOCKPERMS [DIRPERMS [USER [GROUP]]]` | permissions of a Unix AgentX socket (when the agent runs as another user) |
+| `agentXTimeout SECONDS` (default 1) / `agentXRetries N` (default 5) | how long snmpd waits for your agent – raise it if your loop does slow work between `poll()` calls (e.g. client calls) |
+
+The full reference is `man snmpd.conf`. On the **agent** side nothing about versions, communities or users is configured –
+your code is the same for all of them.
+
+**Running snmpd yourself** (development, tests, no root): use ports above 1024 and a private file –
+`snmpd -f -C -r -c my.conf -Lo` (`-f` foreground, `-C` ignore the system configuration, `-r` start without access to root-only
+files, `-Lo` log to stdout); set `SNMP_PERSISTENT_DIR` to a writable directory, snmpd keeps its v3 user data there.
+[scripts/demo.sh](../scripts/demo.sh) does exactly that.
+
+### SNMP versions
 
 | Topic | SNMPv1 | SNMPv2c / v3 |
 |---|---|---|
@@ -745,6 +823,8 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 | create / delete a row on a device | `remote.<table>.create(index, values)` / `.destroy(index)` (RowStatus tables) |
 | receive events | `snmpwrap::NotificationReceiver` + `mib::Notifications` ([6](#receiving-them-client-side)) |
 | talk to a device without a MIB | `snmpwrap::Client`: `get`, `getNext`, `getBulk`, `set`, `walk` |
+| send requests from a fixed IP / port | `SessionConfig::localAddress` ([8](#addresses-and-ports-what-is-set-where)) |
+| set which IPs and ports are used | [section 8](#addresses-and-ports-what-is-set-where) |
 | test my code without network | mock `snmpwrap::Session` / `NotificationSender` / `NotificationSource` ([testing](#testing-your-application-the-interfaces-to-mock)) |
 | be an agent and a client in one program | [section 7](#agent-and-client-in-one-program) |
 
@@ -777,7 +857,7 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 
 | Class / function | What it does |
 |---|---|
-| `snmpwrap::Client(SessionConfig)` | a session to one device: v1 / v2c / v3 (`peer`, `version`, `community`, `user`, `securityLevel`, `auth…`, `priv…`, `contextName`, `timeout`, `retries`) |
+| `snmpwrap::Client(SessionConfig)` | a session to one device: v1 / v2c / v3 (`peer`, `localAddress`, `version`, `community`, `user`, `securityLevel`, `auth…`, `priv…`, `contextName`, `timeout`, `retries`) |
 | `get(oid)` / `get(oids)`, `getNext(oid)`, `getBulk(oids, nonRepeaters, maxRepetitions)` | read by OID |
 | `set(oid, value)` / `set(varbinds)` | write; several values in one atomic request |
 | `walk(root)` / `walk(root, callback)` | a whole subtree (GETBULK on v2c/v3); the callback can stop early |
