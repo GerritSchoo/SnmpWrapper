@@ -5,14 +5,15 @@
 //    snmpd needs 'trap2sink <that address> public')
 //
 // The whole recipe:
-//   1. snmpwrap::Client session(config)       address, version, community / SNMPv3 user
-//   2. my_app_mib::Remote remote(session)     nested like the MIB: remote.group.object.get() / .set(v),
+//   1. std::make_shared<snmpwrap::Client>(config)   address, version, community / SNMPv3 user
+//   2. my_app_mib::Remote remote(session)           nested like the MIB: remote.group.object.get() / .set(v),
 //                                             whole messages: remote.group.send(msg), remote.table[i].send(row)
 //   3. catch TransportError (no answer), ResponseError (agent refused), SetError (MIB check, nothing sent)
 //   4. notifications from the agent: snmpwrap::NotificationReceiver + my_app_mib::Notifications
 
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "my_app_mib.hpp"  // generated from MY-APP-MIB by snmpwrap_add_mib()
@@ -27,7 +28,7 @@ int main(int argc, char** argv) {
     cfg.retries = 1;
 
     try {
-        snmpwrap::Client session(cfg);
+        auto session = std::make_shared<snmpwrap::Client>(cfg);  // shared with remote
         mib::Remote remote(session);
 
         // GET
@@ -84,8 +85,8 @@ int main(int argc, char** argv) {
 
         // notifications (agent -> client): make sensor 2 too warm and wait for appLimitExceeded
         if (argc > 3) {
-            snmpwrap::NotificationReceiver receiver(argv[3]);
-            receiver.acceptCommunities({"public"});  // the community snmpd sends with (trap2sink ... public)
+            auto receiver = std::make_shared<snmpwrap::NotificationReceiver>(argv[3]);
+            receiver->acceptCommunities({"public"});  // the community snmpd sends with (trap2sink ... public)
             mib::Notifications notifications(receiver);
             bool received = false;
             notifications.onAppLimitExceeded([&](const mib::AppLimitExceeded& n) {
@@ -94,7 +95,7 @@ int main(int argc, char** argv) {
                 received = true;
             });
             remote.change().set(remote.appSensors.appLimit, 15).set(remote.appSensors.appSensorTable[2].appSensorMode, mib::AppSensorMode::on).send();
-            for (int i = 0; i < 50 && !received; ++i) receiver.poll(std::chrono::milliseconds(100));
+            for (int i = 0; i < 50 && !received; ++i) receiver->poll(std::chrono::milliseconds(100));
             if (!received) std::cout << "no notification within 5 s\n";
         }
     } catch (const snmpwrap::TransportError& e) {

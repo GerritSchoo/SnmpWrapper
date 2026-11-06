@@ -21,15 +21,18 @@ find_package(NetSNMP 5.9 REQUIRED)
 
 # --- library --------------------------------------------------------------------------------
 add_library(snmpwrap
-    src/snmpwrap/oid.cpp
-    src/snmpwrap/value.cpp
-    src/snmpwrap/mib.cpp
-    src/snmpwrap/index.cpp
-    src/snmpwrap/mib_model.cpp
-    src/snmpwrap/convert.cpp
-    src/snmpwrap/agent.cpp
-    src/snmpwrap/client.cpp
-    src/snmpwrap/notification.cpp)
+    src/snmpwrap/Oid.cpp
+    src/snmpwrap/Value.cpp
+    src/snmpwrap/Mib.cpp
+    src/snmpwrap/Index.cpp
+    src/snmpwrap/MibModel.cpp
+    src/snmpwrap/Convert.cpp
+    src/snmpwrap/Agent.cpp
+    src/snmpwrap/AgentDetail.cpp
+    src/snmpwrap/Client.cpp
+    src/snmpwrap/ClientDetail.cpp
+    src/snmpwrap/NotificationReceiver.cpp
+    src/snmpwrap/NotificationDetail.cpp)
 add_library(snmpwrap::snmpwrap ALIAS snmpwrap)
 
 target_include_directories(snmpwrap
@@ -54,7 +57,7 @@ endif()
 # --- MIB code generator ---------------------------------------------------------------------
 if(SNMPWRAP_BUILD_MIBGEN)
     # the generator itself, as a library: linked by the executable and by the generator tests (not installed)
-    add_library(snmpwrap_mibgen_core STATIC tools/mibgen/generator.cpp)
+    add_library(snmpwrap_mibgen_core STATIC tools/mibgen/Generator.cpp tools/mibgen/Cli.cpp)
     target_include_directories(snmpwrap_mibgen_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/mibgen>)
     target_link_libraries(snmpwrap_mibgen_core PUBLIC snmpwrap)
     set_target_properties(snmpwrap_mibgen_core PROPERTIES CXX_EXTENSIONS OFF)

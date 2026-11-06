@@ -6,12 +6,13 @@
 //   1. fill the generated my_app_mib::Data - plain C++, nested like the MIB
 //   2. my_app_mib::DataAgent serves it; messages tell you what a manager changed - per value, per row or per subtree,
 //      once per request and only after it was committed; onSet can refuse a value before that
-//   3. run agent.poll() in a loop; other threads touch the data only under adapter.lock()
+//   3. run agent->poll() in a loop; other threads touch the data only under adapter.lock()
 
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <iostream>
+#include <memory>
 #include <map>
 #include <string>
 #include <thread>
@@ -34,7 +35,7 @@ int main(int argc, char** argv) {
     if (argc > 1) config.agentxSocket = argv[1];
 
     try {
-        snmpwrap::Agent agent(config);  // only one Agent per process
+        auto agent = std::make_shared<snmpwrap::Agent>(config);  // only one Agent per process; shared with the adapter
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
 
@@ -87,7 +88,7 @@ int main(int argc, char** argv) {
         std::cout << "agent_app: serving " << mib::oids::root.str() << " via " << config.agentxSocket << " (Ctrl+C to stop)" << std::endl;
 
         // --- 3. the agent loop: answers requests, returns at least once per second ----------------------
-        while (!g_stop && agent.poll()) {
+        while (!g_stop && agent->poll()) {
             std::vector<std::pair<mib::AppSensorEntryIndex, mib::AppSensorEntry>> toSend;
             {
                 auto guard = adapter.lock();
@@ -95,7 +96,7 @@ int main(int argc, char** argv) {
                 alarms.clear();
             }
             for (const auto& [index, row] : toSend) {
-                mib::sendAppLimitExceeded(agent, row.appSensorName, row.appSensorTemperature, index);  // notification
+                mib::sendAppLimitExceeded(*agent, row.appSensorName, row.appSensorTemperature, index);  // notification
                 std::cout << "trap sent: " << row.appSensorName << " = " << row.appSensorTemperature << " C" << std::endl;
             }
         }

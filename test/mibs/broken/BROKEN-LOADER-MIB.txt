@@ -1,0 +1,16 @@
+BROKEN-LOADER-MIB DEFINITIONS ::= BEGIN
+
+-- Broken like BROKEN-SYNTAX-MIB, but a file of its own: Net-SNMP parses a file only once per process, so every
+-- test that expects a syntax error reads its own broken file (test/mibgen/cli_test.cpp).
+
+IMPORTS
+    OBJECT-TYPE, Integer32, enterprises FROM SNMPv2-SMI;
+
+brokenLoaderObject OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "The OID assignment below is missing its closing brace."
+    ::= { enterprises 99996
+
+END

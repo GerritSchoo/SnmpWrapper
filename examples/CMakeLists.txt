@@ -7,5 +7,5 @@ if(TARGET snmpwrap::mibgen)
 endif()
 
 # Command line client (get, getnext, getbulk, walk, set) - also used by the integration tests
-add_executable(client_cli client_cli.cpp)
+add_executable(client_cli ClientCli.cpp)
 target_link_libraries(client_cli PRIVATE snmpwrap::snmpwrap)
