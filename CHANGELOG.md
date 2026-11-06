@@ -3,6 +3,31 @@
 ## Unreleased
 
 ### Changed
+- **Breaking:** dependencies are passed as `std::shared_ptr` to an interface in the constructor, so tests can pass mocks:
+  - `DataAgent(std::shared_ptr<Registry>, Data&)`, `DataAgent(std::shared_ptr<MibBuilder>, Data&)` (was `Agent&` / `Mib&`);
+    the DataAgent keeps the agent / Mib alive.
+  - generated `Remote(std::shared_ptr<Session>)`, `Client(std::shared_ptr<Session>)`, `Notifications(std::shared_ptr<NotificationSource>)`.
+  - `registerMib(Registry&, std::shared_ptr<Instrumentation>)` returns `std::shared_ptr<Mib>`; `bind(MibBuilder&, std::shared_ptr<Instrumentation>)`:
+    the Mib keeps the implementation alive (it no longer has to outlive the agent).
+  - `Agent::addMib()` returns `std::shared_ptr<Mib>`.
+  - Create `Agent`, `Client` and `NotificationReceiver` with `std::make_shared`; see the guide, section 7.
+- **Breaking:** file names are UpperCamelCase after what they hold (`snmpwrap/Agent.hpp`, `snmpwrap/MibModel.hpp`,
+  `snmpwrap/NotificationReceiver.hpp` - was `notification.hpp`, `snmpwrap/ISession.hpp`, ...); only `main.cpp` and
+  `test_main.cpp` keep their names. Update your includes. Generated files are named after the MIB as before.
+- **Breaking:** every interface starts with `I` and has a header of its own, named after it: `ISession` (`ISession.hpp`, was
+  `Session` in `session.hpp`), `IHandler` + `ISetTransaction` (`IHandler.hpp`, were `Handler` / `SetTransaction` in `Mib.hpp`),
+  `INotificationSender` (`INotificationSender.hpp`), `INotificationSource` + `Notification` (`INotificationSource.hpp`, both
+  were in `NotificationReceiver.hpp`), generated `IInstrumentation` (was `Instrumentation`). New: `IRegistry` (`IRegistry.hpp`,
+  implemented by `Agent`), `IMibBuilder` + the definitions `ScalarDef`, `TableDef` & co. (`IMibBuilder.hpp`, implemented by
+  `Mib`), `IMibInfo` + `MibNode` & co. (`IMibInfo.hpp`, implemented by `MibModel`). The headers of the implementations
+  include their interfaces, so `#include "snmpwrap/Mib.hpp"` etc. still give everything.
+- `Oid::suffixOf()` throws `Error` when the OID is not a prefix (was undefined behaviour).
+- Generator: `snmpwrap::mibgen::Generator` (interface `CodeGenerator`) instead of the free function `generate()`; the command
+  line is the class `Cli` with injected `MibLoader`, `CodeGenerator` and `FileWriter`.
+- Internal: the logic of Agent, Client and NotificationReceiver that needs no network is in classes of its own
+  (`Registration`, `SessionSetup`, `ResponseReader`, `Walker`, `NotificationDecoder`) and unit-tested.
+- Tests: one `test_main.cpp`; unit tests (label `unit`) one file per source file with mocks next to them, no Agent /
+  Client / network; integration tests (label `integration`) in `test/integration/`.
 - Tests run on GoogleTest / gmock (system package `libgtest-dev libgmock-dev`), one CTest entry per test, laid out like
   the sources: `test/unit/` (library), `test/generated/` (generated code, with gmock for `Session`,
   `NotificationSender`, `NotificationSource`), `test/mibgen/` (generator and command line, new). `ctest -L unit` runs
@@ -10,28 +35,9 @@
 - Tests are switched with CTest's standard `BUILD_TESTING` (`-DBUILD_TESTING=OFF`) instead of `SNMPWRAP_BUILD_TESTS`.
 - The generator is built as the internal library `snmpwrap_mibgen_core` plus the `snmpwrap-mibgen` executable.
 
-### Documentation
-- Guide: new section 11 "Everything at a glance" – every function of the agent and the client side, plus an
-  "I want to …" table. New: `Instrumentation` / `registerMib()`, decoding the row index in the hooks, `AgentConfig`,
-  the flat `mib::Client`, "Agent and client in one program" (rules and a gateway example), ending an adapter at run time.
-  Fixed a link to a test file that no longer exists.
-- The comment at the top of every generated header names all parts (it mentioned only `Instrumentation` and `Client`).
-
-### Added
-- `SessionConfig::localAddress`: a client's own source address ("192.168.1.5" or "192.168.1.5:5000", IPv6 as
-  "[fe80::1]:5000") for hosts with several interfaces. UDP only (refused with a TCP peer); an address that is not this
-  host's, or a port in use, is a `TransportError`. Set for that one `Client` only.
-- Guide section 8: where every address and port is set (agent, snmpd, client, receiver), what snmpd.conf must contain and
-  what it can contain (access, v3 users, views, notification destinations, AgentX timeouts), running snmpd without root.
-- `Agent::removeHandler(root)` / `Agent::removeMib(mib)`: remove a subtree at run time. It is answered as non-existent at
-  once; Net-SNMP / snmpd are told right away, or - from inside a callback or while a SET for it is in progress - on the
-  next `poll()` once that is finished.
-- Preset `asan` (AddressSanitizer + UndefinedBehaviorSanitizer) for all tests; Net-SNMP-internal leaks are suppressed
-  in `test/sanitizer/lsan.supp`.
-- Preset `coverage` and `scripts/coverage.sh`: line / branch coverage over all tests, HTML report in
-  `build/coverage/html/`.
-
 ### Fixed
+- A SET with a value of an ASN.1 type snmpwrap cannot represent leaked an OID in the agent (GCC < 13, PR 66139).
+- Generated `Notifications`: a notification arriving after its destruction no longer reaches freed memory.
 - `DataAgent`: destroying it while the `Agent` keeps polling no longer leads to a use-after-free. The Agent kept the
   registered Mib, whose callbacks pointed into the freed adapter. Now `~DataAgent` removes its subtree from the Agent
   (managers get noSuchObject), and requests that still reach the Mib - a SET in progress, or `DataAgent(Mib&, Data&)` -
@@ -53,12 +59,31 @@
   throws `Error` instead of leading to undefined behaviour.
 
 ### Added
+- `SessionConfig::localAddress`: a client's own source address ("192.168.1.5" or "192.168.1.5:5000", IPv6 as
+  "[fe80::1]:5000") for hosts with several interfaces. UDP only (refused with a TCP peer); an address that is not this
+  host's, or a port in use, is a `TransportError`. Set for that one `Client` only.
+- Guide section 8: where every address and port is set (agent, snmpd, client, receiver), what snmpd.conf must contain and
+  what it can contain (access, v3 users, views, notification destinations, AgentX timeouts), running snmpd without root.
+- `Agent::removeHandler(root)` / `Agent::removeMib(mib)`: remove a subtree at run time. It is answered as non-existent at
+  once; Net-SNMP / snmpd are told right away, or - from inside a callback or while a SET for it is in progress - on the
+  next `poll()` once that is finished.
+- Preset `asan` (AddressSanitizer + UndefinedBehaviorSanitizer) for all tests; Net-SNMP-internal leaks are suppressed
+  in `test/sanitizer/lsan.supp`.
+- Preset `coverage` and `scripts/coverage.sh`: line / branch coverage over all tests, HTML report in
+  `build/coverage/html/`.
 - `Value::fits(Type)` – whether a value can stand for an object of a declared type (OctetString for Bits).
 - `Mib::onUndo()` – start of the rollback of a SET request.
 - Generator: `operator<<` for `Data`, every nested group, table, row, row index and enum – `std::cout << data;` prints
   every value in MIB order, groups and rows indented (enums as `label(number)`, texts quoted, bytes in hex, BITS by name).
 - `NotificationReceiver::acceptCommunities()` – drop notifications with other communities (and do not acknowledge
   their informs). Without it, every notification is accepted as before.
+
+### Documentation
+- Guide: new section 11 "Everything at a glance" – every function of the agent and the client side, plus an
+  "I want to …" table. New: `Instrumentation` / `registerMib()`, decoding the row index in the hooks, `AgentConfig`,
+  the flat `mib::Client`, "Agent and client in one program" (rules and a gateway example), ending an adapter at run time.
+  Fixed a link to a test file that no longer exists.
+- The comment at the top of every generated header names all parts (it mentioned only `Instrumentation` and `Client`).
 
 ## 0.2.0
 

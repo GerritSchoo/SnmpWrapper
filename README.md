@@ -7,13 +7,17 @@ Verschachtelung. Keine OIDs, keine Net-SNMP-Strukturen, kein Callback pro Objekt
 
 ```cpp
 // Agent                                              // Client
+auto agent = std::make_shared<snmpwrap::Agent>();     auto session = std::make_shared<snmpwrap::Client>(cfg);
 my_app_mib::Data data;                                my_app_mib::Remote remote(session);
 data.appName = "my-app";                              remote.appSensors.appLimit.set(35);
 data.appSensors.appSensorTable[1].appSensorName = "cpu";   auto name = remote.appSensors.appSensorTable[1].appSensorName.get();
 my_app_mib::DataAgent adapter(agent, data);
 adapter.onAppSensors([](const my_app_mib::Data::AppSensorsGroup& msg) { /* ein Manager hat diesen Teilbaum geändert */ });
-while (agent.poll()) { ... }
+while (agent->poll()) { ... }
 ```
+
+Abhängigkeiten werden als `std::shared_ptr` auf ein Interface im Konstruktor übergeben (`DataAgent` bekommt eine
+`IRegistry`, `Remote` eine `ISession`, `Notifications` eine `INotificationSource`) – in Tests gibt man dort einen Mock hinein.
 
 **Anleitung (Englisch) mit allen Details: [docs/GUIDE.md](docs/GUIDE.md).**
 Vollständiges, getestetes Beispiel: [examples/apps](examples/apps) (`agent_app` und `client_app`).
@@ -35,7 +39,7 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
 * **Client:** `remote.gruppe.objekt.get()` / `.set(v)`, Tabellen per `[index]`, alles auf einmal mit `remote.read()` (als
   `Data`). Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
   beliebige Werte in einer Anfrage: `remote.change().set(…).set(…).send()`. Werte werden vor dem Senden gegen die MIB geprüft.
-* **Notifications:** Der Agent sendet sie typisiert (`sendAppLimitExceeded(agent, …)`), der Client empfängt sie typisiert
+* **Notifications:** Der Agent sendet sie typisiert (`sendAppLimitExceeded(*agent, …)`), der Client empfängt sie typisiert
   (`snmpwrap::NotificationReceiver` + `my_app_mib::Notifications`, `onAppLimitExceeded(…)`).
 
 ## Bauen (Linux / WSL)
@@ -48,7 +52,8 @@ ohne Tests bauen: `cmake --preset debug -DBUILD_TESTING=OFF`.
 ```sh
 scripts/build.sh            # = cmake --preset debug && cmake --build --preset debug
 scripts/test.sh             # alle Tests, inkl. Integration gegen einen eigenen snmpd (kein root nötig)
-scripts/test.sh debug -L unit   # nur die Unit-Tests (ohne snmpd)
+scripts/test.sh debug -L unit   # nur die Unit-Tests (ohne snmpd, schnell)
+scripts/test.sh debug -L integration   # nur die Integrationstests (eigener snmpd, kein root nötig)
 scripts/coverage.sh         # alle Tests mit Coverage, HTML-Bericht in build/coverage/html/
 scripts/test.sh asan        # alle Tests mit AddressSanitizer / UBSan (Speicherfehler, undefiniertes Verhalten)
 scripts/demo.sh             # snmpd + agent_app + client_app zum Ausprobieren
@@ -87,20 +92,23 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
 | `tools/mibgen/` | der Generator `snmpwrap-mibgen` (MIB → `Data`, `DataAgent`, `Remote`, `send…`) |
 | `cmake/` | `find_package`-Unterstützung, `snmpwrap_add_mib()` |
 | `examples/` | `apps/agent_app`, `apps/client_app` mit `MY-APP-MIB`, dazu das Werkzeug `client_cli` |
-| `test/` | GoogleTest: `unit/` (Bibliothek), `generated/` (generierter Code), `mibgen/` (Generator), `support/` (Helfer, Mocks); Integrationstests gegen einen echten snmpd, Test-MIBs |
+| `test/` | GoogleTest mit einer `test_main.cpp`. Unit-Tests, eine Testdatei pro Quelldatei: `snmpwrap/` (Bibliothek), `mibgen/` (Generator), `generated/` (generierter Code); die Mocks liegen daneben (`<Interface>Mock.hpp`). `integration/`: echte Agent/Client-Objekte und Tests gegen einen eigenen snmpd. Test-MIBs in `mibs/` |
 | `docs/GUIDE.md` | die Anleitung |
 
 ## Getestet / Grenzen
 
 * Linux (WSL2 Ubuntu 22.04, GCC 11), Net-SNMP 5.9.1. Tests (`scripts/test.sh`):
-  * Unit-Tests ohne snmpd (GoogleTest/gmock, jeder Test ein eigener CTest-Eintrag, Label `unit`): `Oid`, `Value`,
-    Index-Kodierung, `Mib` mit GET/GETNEXT-Randfällen, RowStatus, Rollback und großen Tabellen, MIB-Einlesen (`unit.*`);
-    die generierte `Data`-Struktur samt `DataAgent`, Hooks, Validierung, `Remote` gegen eine gemockte `Session` und
-    Notifications (`generated.*`); der Generator selbst mit seinen Fehlermeldungen und der Kommandozeile (`mibgen.*`);
-    Init-Reihenfolge Agent/Client (`lifecycle.*`).
-  * Integration mit echtem `snmpd` für v1, v2c und v3 (noAuthNoPriv, authNoPriv): mit den Net-SNMP-Tools, `snmpwrap::Client`
-    und dem generierten `Remote`; RowStatus, Mehrspalten-Index, GETBULK, Rollback, Traps (`integration`, `integration_data`)
-    sowie die Beispiel-Apps (`apps`).
+  * Unit-Tests (Label `unit`, `ctest -L unit`): jede Klasse und Funktion für sich, Abhängigkeiten als gmock-Mocks;
+    kein Agent, kein Client, kein Netz. Bibliothek (`Oid`, `Value`, Index-Kodierung, Fehlerklassen, `ISession`, `Mib` mit
+    RowStatus und Rollback, `MibModel`, die Umwandlung von/nach Net-SNMP, die Request-Behandlung des Agenten, das
+    Konfigurieren und Auswerten des Clients, das Dekodieren empfangener Notifications), der Generator samt Kommandozeile
+    und der generierte Code (`DataAgent` gegen eine gemockte `IRegistry` / `IMibBuilder`, `Remote` gegen eine gemockte
+    `ISession`, Notifications, Textausgabe).
+  * Integration (Label `integration`, `ctest -L integration`): der echte `Agent` an Net-SNMPs Registrierung, die
+    Init-Reihenfolge Agent/Client, die Absenderadresse des Clients, und gegen einen eigenen `snmpd` für v1, v2c und v3
+    (noAuthNoPriv, authNoPriv): mit den Net-SNMP-Tools, `snmpwrap::Client` und dem generierten `Remote`; RowStatus,
+    Mehrspalten-Index, GETBULK, Rollback, Traps, Abmelden zur Laufzeit (`integration`, `integration_data`) sowie die
+    Beispiel-Apps (`apps`).
 * **v3 authPriv** ist in dieser Umgebung nicht verifiziert (das lokale Net-SNMP ist ohne OpenSSL gebaut; der Test meldet SKIP).
   **SHA-2 und AES192/256** brauchen ein Net-SNMP mit OpenSSL bzw. `--enable-blumenthal-aes`, sonst meldet der Client einen Fehler.
 * SNMP kennt keine Gleitkommazahlen: `Integer32` mit vereinbarter Skalierung (z. B. Zehntelgrad) oder Text verwenden.
@@ -109,6 +117,6 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
   (`data.gruppe`, `data.gruppe.tabelle`, eine Zeile, ein Index, ein Enum).
 * `Data` hält alle Tabellenzeilen im Speicher.
 * Nur AgentX-Subagent, ein Agent pro Prozess, kein Windows. Den Reconnect nach einem snmpd-Neustart übernimmt Net-SNMP.
-* Ohne MIB gibt es die Kern-API (`Mib`, `Handler`, `Client` mit OIDs) – kurz beschrieben im Anhang des Guides.
+* Ohne MIB gibt es die Kern-API (`Mib`, `IHandler`, `Client` mit OIDs) – kurz beschrieben im Anhang des Guides.
 
 Änderungen: [CHANGELOG.md](CHANGELOG.md).
