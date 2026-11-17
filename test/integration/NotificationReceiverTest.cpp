@@ -15,6 +15,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <sys/wait.h>
 #include <mutex>
 #include <future>
 #include <memory>
@@ -310,6 +312,145 @@ TEST(ReceiverBackground, TheDestructorEndsTheLoop) {
     receiver->runInBackground();
     receiver.reset();  // must neither hang nor crash
     SUCCEED();
+}
+
+// --- SNMPv3 -------------------------------------------------------------------------------------
+// Sent by the Net-SNMP tools in a process of their own: a sender in this process would share Net-SNMP's user table
+// with the receiver, and a wrong passphrase could not be told apart.
+
+const std::string kAuth = "authpass123";
+const std::string kPriv = "privpass123";
+const std::string kSenderEngine = "0x8000000001020304";
+
+/// Runs a Net-SNMP tool without any user configuration. @return Its exit code, or -1 if the tools are missing.
+int tool(const std::string& args) {
+    static const bool available = std::system("command -v snmptrap >/dev/null 2>&1 && command -v snmpinform >/dev/null 2>&1") == 0;
+    if (!available) return -1;
+    const std::string env = "SNMPCONFPATH=/nonexistent SNMP_PERSISTENT_DIR=/tmp/snmpwrap-receiver-v3-$$ ";
+    const int rc = std::system((env + args + " >/dev/null 2>&1").c_str());
+    return WIFEXITED(rc) ? WEXITSTATUS(rc) : 1;
+}
+
+class ReceiverV3 : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (tool("true") < 0) GTEST_SKIP() << "snmptrap / snmpinform not found";
+        receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(port));
+        receiver->onNotification([this](const Notification& n) { counter.add(n); });
+    }
+    static NotificationUser user(const std::string& name, SecurityLevel level) {
+        NotificationUser u;
+        u.name = name;
+        u.securityLevel = level;
+        u.authPassphrase = kAuth;
+        u.privPassphrase = kPriv;
+        return u;
+    }
+    /// snmpinform -v3: waits for the acknowledgement. @return True if acknowledged.
+    bool inform(const std::string& security) {
+        return tool("snmpinform -v3 " + security + " -t 1 -r 0 127.0.0.1:" + std::to_string(port) +
+                    " '' 1.3.6.1.4.1.99999.3.0.1 1.3.6.1.4.1.99999.1.1.0 s pump") == 0;
+    }
+    /// snmptrap -v3 with the sender's engine ID.
+    void trap(const std::string& security) {
+        tool("snmptrap -v3 -e " + kSenderEngine + " " + security + " 127.0.0.1:" + std::to_string(port) +
+             " '' 1.3.6.1.4.1.99999.3.0.1 1.3.6.1.4.1.99999.1.1.0 s pump");
+    }
+    /// Nothing arrives within half a second.
+    bool nothing() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::lock_guard<std::mutex> l(counter.mu);
+        return counter.got.empty();
+    }
+
+    int port = freeUdpPort();
+    std::shared_ptr<NotificationReceiver> receiver;
+    Counter counter;
+};
+
+TEST_F(ReceiverV3, AnInformIsAcknowledgedAndCarriesUserAndLevel) {
+    receiver->addUser(user("ops", SecurityLevel::AuthNoPriv));
+    receiver->runInBackground();
+    EXPECT_TRUE(inform("-u ops -l authNoPriv -a SHA -A " + kAuth));
+    ASSERT_TRUE(counter.waitFor(1));
+    const Notification& n = counter.got[0];
+    EXPECT_EQ(n.version, 3);
+    EXPECT_TRUE(n.inform);
+    EXPECT_EQ(n.user, "ops");
+    EXPECT_EQ(n.securityLevel, SecurityLevel::AuthNoPriv);
+    EXPECT_EQ(n.trapOid, kAlarm);
+    ASSERT_EQ(n.vars.size(), 1u);
+    EXPECT_EQ(n.vars[0].value, Value::string("pump"));
+}
+
+TEST_F(ReceiverV3, ATrapNeedsTheEngineIdOfTheSender) {
+    NotificationUser u = user("trapper", SecurityLevel::AuthNoPriv);
+    u.engineId = kSenderEngine;
+    receiver->addUser(u);
+    receiver->runInBackground();
+    trap("-u trapper -l authNoPriv -a SHA -A " + kAuth);
+    ASSERT_TRUE(counter.waitFor(1));
+    EXPECT_EQ(counter.got[0].user, "trapper");
+    EXPECT_FALSE(counter.got[0].inform);
+}
+
+TEST_F(ReceiverV3, AWrongPassphraseIsNotHeard) {
+    receiver->addUser(user("ops", SecurityLevel::AuthNoPriv));
+    receiver->runInBackground();
+    EXPECT_FALSE(inform("-u ops -l authNoPriv -a SHA -A wrongpass99"));
+    EXPECT_TRUE(nothing());
+}
+
+TEST_F(ReceiverV3, ATrapWithAWrongPassphraseIsNotHeard) {
+    NotificationUser u = user("trapper", SecurityLevel::AuthNoPriv);
+    u.engineId = kSenderEngine;
+    receiver->addUser(u);
+    receiver->runInBackground();
+    trap("-u trapper -l authNoPriv -a SHA -A wrongpass99");
+    EXPECT_TRUE(nothing());
+}
+
+TEST_F(ReceiverV3, AnUnknownUserIsNotHeard) {
+    receiver->addUser(user("ops", SecurityLevel::AuthNoPriv));
+    receiver->runInBackground();
+    EXPECT_FALSE(inform("-u stranger -l authNoPriv -a SHA -A " + kAuth));
+    EXPECT_TRUE(nothing());
+}
+
+TEST_F(ReceiverV3, ALevelBelowTheUsersIsNotHeard) {  // the user's name alone, without its keys
+    receiver->addUser(user("ops", SecurityLevel::AuthNoPriv));
+    receiver->runInBackground();
+    EXPECT_FALSE(inform("-u ops -l noAuthNoPriv"));
+    EXPECT_TRUE(nothing());
+}
+
+TEST_F(ReceiverV3, AcceptOnlyV3DropsV2c) {
+    receiver->addUser(user("ops", SecurityLevel::AuthNoPriv));
+    receiver->acceptOnlyV3();
+    receiver->runInBackground();
+    Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 1, "dropped");
+    EXPECT_TRUE(inform("-u ops -l authNoPriv -a SHA -A " + kAuth));
+    ASSERT_TRUE(counter.waitFor(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::lock_guard<std::mutex> l(counter.mu);
+    ASSERT_EQ(counter.got.size(), 1u);
+    EXPECT_EQ(counter.got[0].version, 3);
+}
+
+TEST_F(ReceiverV3, AuthPrivWithAes) {
+    // like the integration suite: AES needs a Net-SNMP built with OpenSSL; the internal crypto here cannot do it
+    if (std::system("net-snmp-config --configure-options 2>/dev/null | grep -q -e 'openssl=internal' -e 'without-openssl'") == 0)
+        GTEST_SKIP() << "this Net-SNMP is built without OpenSSL: no AES";
+    receiver->addUser(user("secret", SecurityLevel::AuthPriv));
+    receiver->runInBackground();
+    EXPECT_TRUE(inform("-u secret -l authPriv -a SHA -A " + kAuth + " -x AES -X " + kPriv));
+    ASSERT_TRUE(counter.waitFor(1));
+    EXPECT_EQ(counter.got[0].securityLevel, SecurityLevel::AuthPriv);
+}
+
+TEST_F(ReceiverV3, UsersAreAddedBeforeTheBackgroundLoopStarts) {
+    receiver->runInBackground();
+    EXPECT_THROW(receiver->addUser(user("late", SecurityLevel::AuthNoPriv)), Error);
 }
 
 TEST_F(ReceiverTest, AnAddressInUseIsATransportError) {

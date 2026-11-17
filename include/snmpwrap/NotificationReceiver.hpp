@@ -13,14 +13,34 @@
 
 #include "snmpwrap/INotificationSender.hpp"
 #include "snmpwrap/INotificationSource.hpp"
+#include "snmpwrap/Security.hpp"
 
 namespace snmpwrap {
+
+/**
+ * @brief An SNMPv3 user whose notifications a NotificationReceiver accepts (NotificationReceiver::addUser()).
+ *
+ * The same user, protocols and passphrases as on the sending side (snmpd.conf: `trapsess -v3 ...`).
+ * - Informs (`trapsess -Ci -v3 ...`, recommended): leave engineId empty. The sender asks the receiver for its engine ID
+ *   by itself.
+ * - Traps (`trapsess -v3 ...` without -Ci): set engineId to the engine ID of the SENDER (snmpd: the `engineID` line of
+ *   snmpd.conf, or read snmpEngineID.0 = 1.3.6.1.6.3.10.2.1.1.0), because a trap carries the sender's keys.
+ */
+struct NotificationUser {
+    std::string name;                                        ///< USM user name (securityName); no blanks.
+    SecurityLevel securityLevel = SecurityLevel::AuthPriv;   ///< The lowest level accepted from this user.
+    AuthProtocol authProtocol = AuthProtocol::SHA1;          ///< Authentication protocol (AuthNoPriv, AuthPriv).
+    std::string authPassphrase;                              ///< At least 8 characters.
+    PrivProtocol privProtocol = PrivProtocol::AES128;        ///< Privacy protocol (AuthPriv).
+    std::string privPassphrase;                              ///< At least 8 characters.
+    std::string engineId;  ///< Traps only: the sender's engine ID in hex ("0x80001f8803..." or "80001f8803..."); empty = informs.
+};
 
 /**
  * @brief Listens for SNMPv1 / SNMPv2c traps and informs on a UDP (or TCP) address.
  *
  * Point snmpd's trap destinations at it (`trap2sink`, `trapsink`, `informsink` in snmpd.conf).
- * Informs are acknowledged automatically. SNMPv3 notifications are not supported.
+ * Informs are acknowledged automatically. SNMPv3 traps and informs are accepted from the users added with addUser().
  *
  * @code
  * NotificationReceiver receiver("udp:0.0.0.0:1162");     // port 162 needs root
@@ -63,6 +83,21 @@ public:
      *       Thread-safe: applies from the next notification on.
      */
     void acceptCommunities(std::vector<std::string> communities);
+
+    /**
+     * @brief Accepts SNMPv3 notifications of this user (at least at user.securityLevel).
+     *
+     * v3 notifications of users not added here are dropped (Net-SNMP rejects unknown users and wrong keys itself;
+     * a known user's message below its securityLevel is dropped here). Call it before receiving starts (before
+     * poll() / run() / runInBackground()); the users stay known to Net-SNMP in this process.
+     * @param[in] user The user (see NotificationUser: informs or traps).
+     * @throws Error if a field is invalid, a passphrase is shorter than 8 characters, the protocol is not supported by
+     *         this Net-SNMP build, or the receiver runs in the background already.
+     */
+    void addUser(const NotificationUser& user);
+
+    /// @brief Drops every SNMPv1 / SNMPv2c notification: only SNMPv3 users added with addUser() are heard. Thread-safe.
+    void acceptOnlyV3();
 
     /**
      * @brief Waits for and processes incoming messages.

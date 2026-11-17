@@ -13,6 +13,7 @@
 #include "snmpwrap/Error.hpp"
 #include "snmpwrap/Oid.hpp"
 #include "snmpwrap/ISession.hpp"
+#include "snmpwrap/Security.hpp"
 #include "snmpwrap/Value.hpp"
 
 namespace snmpwrap {
@@ -36,12 +37,12 @@ namespace snmpwrap {
 struct SessionConfig {
     /// @brief SNMP protocol version.
     enum class Version { V1, V2c, V3 };
-    /// @brief SNMPv3 security level.
-    enum class SecurityLevel { NoAuthNoPriv, AuthNoPriv, AuthPriv };
-    /// @brief SNMPv3 authentication protocol.
-    enum class AuthProtocol { MD5, SHA1, SHA224, SHA256, SHA384, SHA512 };
-    /// @brief SNMPv3 privacy (encryption) protocol.
-    enum class PrivProtocol { DES, AES128, AES192, AES256 };
+    /// @brief SNMPv3 security level (snmpwrap::SecurityLevel, Security.hpp).
+    using SecurityLevel = ::snmpwrap::SecurityLevel;
+    /// @brief SNMPv3 authentication protocol (snmpwrap::AuthProtocol, Security.hpp).
+    using AuthProtocol = ::snmpwrap::AuthProtocol;
+    /// @brief SNMPv3 privacy (encryption) protocol (snmpwrap::PrivProtocol, Security.hpp).
+    using PrivProtocol = ::snmpwrap::PrivProtocol;
 
     /// Agent address "[udp:|tcp:]host[:port]", e.g. "127.0.0.1:161" (port defaults to 161).
     std::string peer = "127.0.0.1:161";

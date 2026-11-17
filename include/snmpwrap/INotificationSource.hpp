@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "snmpwrap/Oid.hpp"
+#include "snmpwrap/Security.hpp"
 #include "snmpwrap/Value.hpp"
 
 namespace snmpwrap {
@@ -21,8 +22,10 @@ struct Notification {
     std::uint32_t uptime = 0;   ///< sysUpTime.0 of the sender (hundredths of a second).
     std::vector<VarBind> vars;  ///< The varbinds (the OBJECTS of the notification), without sysUpTime.0 / snmpTrapOID.0.
     std::string source;         ///< Sender address, e.g. "UDP: [127.0.0.1]:48531->[127.0.0.1]:1162".
-    std::string community;      ///< Community string of the message.
-    int version = 2;            ///< 1 = SNMPv1 trap, 2 = SNMPv2c trap or inform.
+    std::string community;      ///< Community string of the message (v1 / v2c; empty for v3).
+    int version = 2;            ///< 1 = SNMPv1 trap, 2 = SNMPv2c trap or inform, 3 = SNMPv3 trap or inform.
+    std::string user;           ///< SNMPv3: the USM user that sent it (authenticated by Net-SNMP); empty for v1 / v2c.
+    SecurityLevel securityLevel = SecurityLevel::NoAuthNoPriv;  ///< SNMPv3: the level the message came with.
     bool inform = false;        ///< True for an inform (acknowledged automatically).
 };
 

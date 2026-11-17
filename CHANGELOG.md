@@ -67,6 +67,12 @@
   so creating and destroying a `DataAgent`, run on the loop thread while the caller waits for the result.
   `Agent::wait()` waits for the end of the loop after `stop()`; `stop()` ends the background loop at once instead of at the next
   1 s heartbeat. Test `integration_background` runs the whole integration suite against it.
+- SNMPv3 notifications: `NotificationReceiver::addUser(NotificationUser)` accepts v3 traps (`engineId` = the sender's)
+  and informs of a user, at least at its `securityLevel`; `acceptOnlyV3()` drops v1 / v2c. `Notification` has `user`
+  and `securityLevel`; `version` is 3. Messages whose authentication failed are dropped (Net-SNMP hands them to the
+  session callback as well, marked only by `s_snmp_errno`). The integration suite receives a v3 trap from snmpd.
+- `Security.hpp`: `SecurityLevel`, `AuthProtocol`, `PrivProtocol` at namespace level, shared by `SessionConfig` (as
+  aliases, so `SessionConfig::SecurityLevel` etc. still work) and `NotificationUser`.
 - `NotificationReceiver::runInBackground()` / `wait()`: receiving on a thread of the receiver's own, the handlers run there.
   `onNotification()` and `acceptCommunities()` are thread-safe (also while it runs, also from inside a handler);
   `stop()` ends `run()` and the background loop at once (wake-up pipe) instead of after up to a second.

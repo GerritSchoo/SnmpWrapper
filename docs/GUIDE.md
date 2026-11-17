@@ -531,8 +531,42 @@ In snmpd.conf: `trap2sink <address> public` (SNMPv2c), `trapsink` (SNMPv1, conve
 `informsink` (acknowledged by the receiver). Every notification has `raw` with sender, community, version and all varbinds.
 Without `acceptCommunities(...)` the receiver takes notifications from anyone who can reach its address; with it, others
 are dropped (and not acknowledged).
-SNMPv3 notifications are not supported by the receiver. `snmpwrap::NotificationReceiver` alone works without a MIB
-(`onNotification(...)` with `trapOid` and varbinds).
+`snmpwrap::NotificationReceiver` alone works without a MIB (`onNotification(...)` with `trapOid` and varbinds).
+
+### SNMPv3 notifications
+
+SNMPv3 has no community but users with passphrases; the receiver must know them. Add them before receiving starts:
+
+```cpp
+snmpwrap::NotificationUser user;
+user.name = "trapuser";
+user.securityLevel = snmpwrap::SecurityLevel::AuthPriv;   // the lowest level accepted from this user
+user.authProtocol = snmpwrap::AuthProtocol::SHA256;       user.authPassphrase = "…";   // at least 8 characters
+user.privProtocol = snmpwrap::PrivProtocol::AES128;       user.privPassphrase = "…";
+user.engineId = "0x80001f8804736967706c63";               // traps: the engine ID of the sending snmpd (below)
+receiver->addUser(user);
+receiver->acceptOnlyV3();                                 // optional: drop every v1 / v2c notification
+```
+
+A notification of such a user has `raw.version == 3`, `raw.user` and `raw.securityLevel`. Net-SNMP checks user and keys;
+unknown users, wrong passphrases and messages below the user's `securityLevel` never reach a handler.
+
+**Trap or inform?** A v3 *trap* is keyed with the engine ID of the sender, so the receiver must know it: give snmpd a
+fixed one and put the same into `engineId`. A v3 *inform* is keyed with the receiver's engine ID, which snmpd asks for
+by itself (leave `engineId` empty) – but snmpd blocks while it asks a receiver that does not answer (not started, network
+down), and answers no requests meanwhile. So for a receiver that may be away, prefer traps:
+
+```
+# snmpd.conf of the agent - v3 trap
+engineID sigplc                                   # fixed engine ID: text "sigplc" = 0x80001f8804 + hex("sigplc")
+trapsess -v3 -u trapuser -l authPriv -a SHA-256 -A authpass… -x AES -X privpass… 192.168.1.50:162
+
+# v3 inform instead (engineId stays empty; snmpd blocks while the receiver is unreachable)
+trapsess -Ci -v3 -u trapuser -l authPriv -a SHA-256 -A authpass… -x AES -X privpass… 192.168.1.50:162
+```
+
+The engine ID of a running snmpd: `snmpget -v2c -c public <host> 1.3.6.1.6.3.10.2.1.1.0` (snmpEngineID.0). Which algorithms
+work depends on the Net-SNMP build (see `Security.hpp`: SHA-2 needs OpenSSL, AES192/256 also `--enable-blumenthal-aes`).
 
 ---
 

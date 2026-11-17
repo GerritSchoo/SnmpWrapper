@@ -34,14 +34,22 @@ int main(int argc, char** argv) {
         // notifications: listen first, the agent sends swtAlarm every few seconds (as v2c trap, v1 trap and inform)
         std::shared_ptr<snmpwrap::NotificationReceiver> receiver;
         std::unique_ptr<Notifications> notifications;
-        int v2 = 0, v1 = 0, informs = 0;
+        int v2 = 0, v1 = 0, informs = 0, v3 = 0;
         bool fieldsOk = true;
         if (argc > 2) {
             receiver = std::make_shared<snmpwrap::NotificationReceiver>(argv[2]);
+            snmpwrap::NotificationUser user;  // snmpd.conf: engineID snmpwraptest, trapsess -v3 -u authuser -l authNoPriv ...
+            user.name = "authuser";
+            user.engineId = "0x80001f8804736e6d707772617074657374";  // snmpd's engine ID: a v3 trap is keyed with it
+            user.securityLevel = snmpwrap::SecurityLevel::AuthNoPriv;
+            user.authPassphrase = "authpass123";
+            receiver->addUser(user);
             notifications = std::make_unique<Notifications>(receiver);
             notifications->onSwtAlarm([&](const SwtAlarm& a) {
                 fieldsOk = fieldsOk && !a.swtName.empty() && a.swtLimit >= 1 && a.swtLimit <= 100;
-                if (a.raw.inform) ++informs;
+                if (a.raw.version == 3) {
+                    if (!a.raw.inform && a.raw.user == "authuser" && a.raw.securityLevel == snmpwrap::SecurityLevel::AuthNoPriv) ++v3;
+                } else if (a.raw.inform) ++informs;
                 else if (a.raw.version == 1) ++v1;
                 else ++v2;
             });
@@ -142,10 +150,12 @@ int main(int argc, char** argv) {
             while (std::chrono::steady_clock::now() < until) receiver->poll(std::chrono::milliseconds(100));
             check(v2 == 0 && v1 == 0 && informs == 0, "notification: other communities dropped (acceptCommunities)");
             receiver->acceptCommunities({"public"});
-            for (int i = 0; i < 100 && (v2 == 0 || v1 == 0 || informs == 0); ++i) receiver->poll(std::chrono::milliseconds(100));
+            for (int i = 0; i < 100 && (v2 == 0 || v1 == 0 || informs == 0 || v3 == 0); ++i)
+                receiver->poll(std::chrono::milliseconds(100));
             check(v2 > 0, "notification: v2c trap swtAlarm received, typed");
             check(v1 > 0, "notification: v1 trap converted to swtAlarm");
             check(informs > 0, "notification: inform received (and acknowledged)");
+            check(v3 > 0, "notification: SNMPv3 trap from snmpd received (user authuser, authNoPriv)");
             check(fieldsOk, "notification: values decoded (swtName, swtLimit)");
         }
     } catch (const std::exception& e) {

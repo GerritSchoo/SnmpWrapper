@@ -1,29 +1,20 @@
 #include "ClientDetail.hpp"
 
 #include "Convert.hpp"
+#include "Usm.hpp"
 
 namespace snmpwrap::detail {
 
 namespace {
 
-// SHA-2 (RFC 7860) and AES192/256 (Blumenthal draft) protocol OIDs. Defined here because Net-SNMP only
-// exports its own copies when built with OpenSSL / --enable-blumenthal-aes; if the library lacks the
-// algorithm, key derivation or session opening fails and is reported as an Error.
-const ::oid kSHA224[] = {1, 3, 6, 1, 6, 3, 10, 1, 1, 4};
-const ::oid kSHA256[] = {1, 3, 6, 1, 6, 3, 10, 1, 1, 5};
-const ::oid kSHA384[] = {1, 3, 6, 1, 6, 3, 10, 1, 1, 6};
-const ::oid kSHA512[] = {1, 3, 6, 1, 6, 3, 10, 1, 1, 7};
-const ::oid kAES192[] = {1, 3, 6, 1, 4, 1, 14832, 1, 3};
-const ::oid kAES256[] = {1, 3, 6, 1, 4, 1, 14832, 1, 4};
-
-void setAuth(netsnmp_session& sess, const ::oid* proto, std::size_t len) {
-    sess.securityAuthProto = const_cast<::oid*>(proto);
-    sess.securityAuthProtoLen = len;
+void setAuth(netsnmp_session& sess, ProtocolOid proto) {
+    sess.securityAuthProto = const_cast<::oid*>(proto.oid);
+    sess.securityAuthProtoLen = proto.length;
 }
 
-void setPriv(netsnmp_session& sess, const ::oid* proto, std::size_t len) {
-    sess.securityPrivProto = const_cast<::oid*>(proto);
-    sess.securityPrivProtoLen = len;
+void setPriv(netsnmp_session& sess, ProtocolOid proto) {
+    sess.securityPrivProto = const_cast<::oid*>(proto.oid);
+    sess.securityPrivProtoLen = proto.length;
 }
 
 }  // namespace
@@ -53,15 +44,7 @@ void SessionSetup::configure(netsnmp_session& sess) const {
                              : cfg_.securityLevel == L::AuthNoPriv ? SNMP_SEC_LEVEL_AUTHNOPRIV
                                                                     : SNMP_SEC_LEVEL_AUTHPRIV;
         if (cfg_.securityLevel != L::NoAuthNoPriv) {
-            using A = SessionConfig::AuthProtocol;
-            switch (cfg_.authProtocol) {
-                case A::MD5: setAuth(sess, usmHMACMD5AuthProtocol, OID_LENGTH(usmHMACMD5AuthProtocol)); break;
-                case A::SHA1: setAuth(sess, usmHMACSHA1AuthProtocol, OID_LENGTH(usmHMACSHA1AuthProtocol)); break;
-                case A::SHA224: setAuth(sess, kSHA224, OID_LENGTH(kSHA224)); break;
-                case A::SHA256: setAuth(sess, kSHA256, OID_LENGTH(kSHA256)); break;
-                case A::SHA384: setAuth(sess, kSHA384, OID_LENGTH(kSHA384)); break;
-                case A::SHA512: setAuth(sess, kSHA512, OID_LENGTH(kSHA512)); break;
-            }
+            setAuth(sess, authProtocolOid(cfg_.authProtocol));
             sess.securityAuthKeyLen = USM_AUTH_KU_LEN;
             if (generate_Ku(sess.securityAuthProto, static_cast<u_int>(sess.securityAuthProtoLen),
                             reinterpret_cast<const u_char*>(cfg_.authPassphrase.data()), cfg_.authPassphrase.size(),
@@ -69,13 +52,7 @@ void SessionSetup::configure(netsnmp_session& sess) const {
                 throw Error("cannot derive SNMPv3 authentication key (algorithm unsupported by this Net-SNMP build?)");
         }
         if (cfg_.securityLevel == L::AuthPriv) {
-            using P = SessionConfig::PrivProtocol;
-            switch (cfg_.privProtocol) {
-                case P::DES: setPriv(sess, usmDESPrivProtocol, OID_LENGTH(usmDESPrivProtocol)); break;
-                case P::AES128: setPriv(sess, usmAESPrivProtocol, OID_LENGTH(usmAESPrivProtocol)); break;
-                case P::AES192: setPriv(sess, kAES192, OID_LENGTH(kAES192)); break;
-                case P::AES256: setPriv(sess, kAES256, OID_LENGTH(kAES256)); break;
-            }
+            setPriv(sess, privProtocolOid(cfg_.privProtocol));
             sess.securityPrivKeyLen = USM_PRIV_KU_LEN;
             if (generate_Ku(sess.securityAuthProto, static_cast<u_int>(sess.securityAuthProtoLen),
                             reinterpret_cast<const u_char*>(cfg_.privPassphrase.data()), cfg_.privPassphrase.size(),

@@ -55,6 +55,18 @@ public:
         pdu_->time = time;
         return *this;
     }
+    /// An SNMPv3 message of @p user, as Net-SNMP hands it over after checking user and keys.
+    Pdu& v3(const std::string& user, int netsnmpLevel) {
+        pdu_->version = SNMP_VERSION_3;
+        free(pdu_->community);
+        pdu_->community = nullptr;
+        pdu_->community_len = 0;
+        pdu_->securityName = static_cast<char*>(malloc(user.size() + 1));
+        std::memcpy(pdu_->securityName, user.c_str(), user.size() + 1);
+        pdu_->securityNameLen = user.size();
+        pdu_->securityLevel = netsnmpLevel;
+        return *this;
+    }
     netsnmp_pdu& pdu() { return *pdu_; }
 
 private:
@@ -199,6 +211,132 @@ TEST(NotificationDecoder, InformsOfOtherCommunitiesAreDropped) {  // and so not 
     Pdu p(SNMP_MSG_INFORM, "private");
     p.v2Header(1, kAlarm);
     EXPECT_FALSE(d.decode(p.pdu(), ""));
+}
+
+// --- SNMPv3 ---------------------------------------------------------------------------------------
+
+TEST(NotificationDecoder, V3OfAnAcceptedUserIsDecodedLikeV2) {
+    NotificationDecoder d;
+    d.acceptUser("ops", SecurityLevel::AuthNoPriv);
+    Pdu p(SNMP_MSG_INFORM);
+    p.v3("ops", SNMP_SEC_LEVEL_AUTHPRIV).v2Header(42, kAlarm).add(kName, Value::string("pump"));
+    const auto n = d.decode(p.pdu(), "src");
+    ASSERT_TRUE(n);
+    EXPECT_EQ(n->version, 3);
+    EXPECT_EQ(n->user, "ops");
+    EXPECT_EQ(n->securityLevel, SecurityLevel::AuthPriv);
+    EXPECT_TRUE(n->inform);
+    EXPECT_TRUE(n->community.empty());
+    EXPECT_EQ(n->trapOid, kAlarm);
+    EXPECT_EQ(n->uptime, 42u);
+    ASSERT_EQ(n->vars.size(), 1u);
+    EXPECT_EQ(n->vars[0].value, Value::string("pump"));
+}
+
+TEST(NotificationDecoder, V3BelowTheLevelOfTheUserIsDropped) {  // e.g. noAuthNoPriv with the name of an auth user
+    NotificationDecoder d;
+    d.acceptUser("ops", SecurityLevel::AuthPriv);
+    Pdu p(SNMP_MSG_TRAP2);
+    p.v3("ops", SNMP_SEC_LEVEL_AUTHNOPRIV).v2Header(1, kAlarm);
+    EXPECT_FALSE(d.decode(p.pdu(), ""));
+}
+
+TEST(NotificationDecoder, V3OfAUserNotAcceptedIsDropped) {
+    NotificationDecoder d;
+    d.acceptUser("ops", SecurityLevel::NoAuthNoPriv);
+    Pdu p(SNMP_MSG_TRAP2);
+    p.v3("guest", SNMP_SEC_LEVEL_AUTHPRIV).v2Header(1, kAlarm);
+    EXPECT_FALSE(d.decode(p.pdu(), ""));
+    EXPECT_FALSE(NotificationDecoder().decode(p.pdu(), ""));  // no user at all: no v3
+}
+
+TEST(NotificationDecoder, TheCommunityFilterDoesNotApplyToV3) {
+    NotificationDecoder d;
+    d.acceptCommunities({"public"});
+    d.acceptUser("ops", SecurityLevel::AuthNoPriv);
+    Pdu p(SNMP_MSG_TRAP2);
+    p.v3("ops", SNMP_SEC_LEVEL_AUTHNOPRIV).v2Header(1, kAlarm);
+    EXPECT_TRUE(d.decode(p.pdu(), ""));
+}
+
+TEST(NotificationDecoder, AcceptOnlyV3DropsV1AndV2c) {
+    NotificationDecoder d;
+    d.acceptOnlyV3();
+    d.acceptUser("ops", SecurityLevel::AuthNoPriv);
+    Pdu v2(SNMP_MSG_TRAP2), v1(SNMP_MSG_TRAP), v3(SNMP_MSG_TRAP2);
+    v2.v2Header(1, kAlarm);
+    v1.v1(Oid({1, 3, 6, 1, 4, 1, 99999}), SNMP_TRAP_COLDSTART, 0, 1);
+    v3.v3("ops", SNMP_SEC_LEVEL_AUTHNOPRIV).v2Header(1, kAlarm);
+    EXPECT_FALSE(d.decode(v2.pdu(), ""));
+    EXPECT_FALSE(d.decode(v1.pdu(), ""));
+    EXPECT_TRUE(d.decode(v3.pdu(), ""));
+}
+
+// --- createUsmUser ------------------------------------------------------------------------------
+
+class UsmUser : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() { initLibrary("snmpwrap-usm-test"); }
+    static NotificationUser user(const std::string& name) {
+        NotificationUser u;
+        u.name = name;
+        u.securityLevel = SecurityLevel::AuthNoPriv;
+        u.authPassphrase = "authpass123";
+        return u;
+    }
+    /// Is @p name known to Net-SNMP for this engine ID (empty = the local one)?
+    static bool known(const std::string& name, std::vector<u_char> engine = {}) {
+        if (engine.empty()) {
+            engine.resize(64);
+            engine.resize(static_cast<std::size_t>(snmpv3_get_engineID(engine.data(), engine.size())));
+        }
+        return usm_get_user(engine.data(), engine.size(), const_cast<char*>(name.c_str())) != nullptr;
+    }
+};
+
+TEST_F(UsmUser, AnInformUserIsCreatedForTheLocalEngine) {
+    createUsmUser(user("informer"));
+    EXPECT_TRUE(known("informer"));
+}
+
+TEST_F(UsmUser, ATrapUserIsCreatedForTheSendersEngine) {
+    NotificationUser u = user("trapper");
+    u.engineId = "0x8000000001020304";
+    createUsmUser(u);
+    EXPECT_TRUE(known("trapper", {0x80, 0, 0, 0, 1, 2, 3, 4}));
+    EXPECT_FALSE(known("trapper"));
+}
+
+TEST_F(UsmUser, AnAuthPrivUserWithAes) {
+    NotificationUser u = user("secret");
+    u.securityLevel = SecurityLevel::AuthPriv;
+    u.privPassphrase = "privpass123";
+    createUsmUser(u);
+    EXPECT_TRUE(known("secret"));
+}
+
+TEST_F(UsmUser, ANoAuthUserNeedsNoPassphrase) {
+    NotificationUser u;
+    u.name = "plain";
+    u.securityLevel = SecurityLevel::NoAuthNoPriv;
+    createUsmUser(u);
+    EXPECT_TRUE(known("plain"));
+}
+
+TEST_F(UsmUser, InvalidFieldsAreErrors) {
+    EXPECT_THROW(createUsmUser(user("")), Error);
+    EXPECT_THROW(createUsmUser(user("two words")), Error);
+    NotificationUser shortPass = user("short");
+    shortPass.authPassphrase = "1234567";  // fewer than 8 characters
+    EXPECT_THROW(createUsmUser(shortPass), Error);
+    NotificationUser noPriv = user("nopriv");
+    noPriv.securityLevel = SecurityLevel::AuthPriv;  // privPassphrase missing
+    EXPECT_THROW(createUsmUser(noPriv), Error);
+    for (const char* bad : {"0xZZ", "0x123", "80 00", "0x"}) {
+        NotificationUser u = user("engine");
+        u.engineId = bad;
+        EXPECT_THROW(createUsmUser(u), Error) << bad;
+    }
 }
 
 }  // namespace

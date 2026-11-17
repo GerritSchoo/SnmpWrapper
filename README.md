@@ -42,7 +42,8 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
   `Data`). Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
   beliebige Werte in einer Anfrage: `remote.change().set(…).set(…).send()`. Werte werden vor dem Senden gegen die MIB geprüft.
 * **Notifications:** Der Agent sendet sie typisiert (`sendAppLimitExceeded(*agent, …)`), der Client empfängt sie typisiert
-  (`snmpwrap::NotificationReceiver` + `my_app_mib::Notifications`, `onAppLimitExceeded(…)`).
+  (`snmpwrap::NotificationReceiver` + `my_app_mib::Notifications`, `onAppLimitExceeded(…)`) – v1/v2c per Community,
+  SNMPv3 von Benutzern, die mit `receiver->addUser(…)` bekannt gemacht wurden.
 
 ## Bauen (Linux / WSL)
 

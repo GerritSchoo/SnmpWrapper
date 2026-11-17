@@ -51,6 +51,11 @@ trapsink 127.0.0.1:$TPORT public
 trap2sink 127.0.0.1:$NPORT public
 trapsink 127.0.0.1:$NPORT public
 informsink 127.0.0.1:$NPORT public
+# SNMPv3 trap (authNoPriv: works with every Net-SNMP build). A trap carries the keys of the SENDER: a fixed engine ID
+# (text "snmpwraptest" = 0x80001f8804736e6d707772617074657374) that the EXTRA_CHECK receiver is told. Not an inform: snmpd would block
+# while it asks a receiver that is not listening yet for its engine ID.
+engineID snmpwraptest
+trapsess -v3 -u authuser -l authNoPriv -a SHA -A $AUTHPASS 127.0.0.1:$NPORT
 EOF
 cat > "$WORK/snmptrapd.conf" <<EOF
 authCommunity log public

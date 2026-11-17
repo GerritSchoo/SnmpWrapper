@@ -35,8 +35,11 @@ struct NotificationReceiver::Impl {
             if (fd >= 0) ::close(fd);
     }
 
-    static int callback(int op, netsnmp_session*, int, netsnmp_pdu* pdu, void* magic) {
+    static int callback(int op, netsnmp_session* session, int, netsnmp_pdu* pdu, void* magic) {
         if (op != NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE || !pdu) return 1;
+        // Net-SNMP hands over SNMPv3 messages whose authentication FAILED as well (usm_handle_report(), so that
+        // snmptrapd can report them), marked only by this errno during the call: never a notification for us.
+        if (session && session->s_snmp_errno == SNMPERR_USM_AUTHENTICATIONFAILURE) return 1;
         auto* self = static_cast<Impl*>(magic);
         try {
             self->received(pdu);
@@ -127,6 +130,20 @@ void NotificationReceiver::onNotification(std::function<void(const Notification&
 void NotificationReceiver::acceptCommunities(std::vector<std::string> communities) {
     std::lock_guard<std::mutex> l(impl_->mu);
     impl_->decoder.acceptCommunities(std::move(communities));
+}
+
+void NotificationReceiver::addUser(const NotificationUser& user) {
+    if (impl_->background)
+        throw Error("NotificationReceiver::addUser() must be called before runInBackground() (Net-SNMP's user table "
+                    "is read by the receiving thread)");
+    detail::createUsmUser(user);  // Net-SNMP: authenticates the user's messages
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->decoder.acceptUser(user.name, user.securityLevel);  // snmpwrap: the user's lowest level
+}
+
+void NotificationReceiver::acceptOnlyV3() {
+    std::lock_guard<std::mutex> l(impl_->mu);
+    impl_->decoder.acceptOnlyV3();
 }
 
 bool NotificationReceiver::poll(std::chrono::milliseconds timeout) {
