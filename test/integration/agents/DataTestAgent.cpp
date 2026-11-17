@@ -1,7 +1,10 @@
 // SNMPWRAPPER-TEST-MIB served from the generated nested Data structure (snmpwrap_add_mib + DataAgent).
 // Same behaviour and command line as the other test agents, so the same integration suite runs against it:
 //
-//   data_test_agent [--socket <agentx>] [--trap-every <s>] [--big-table <rows>]
+//   data_test_agent [--socket <agentx>] [--trap-every <s>] [--big-table <rows>] [--background]
+//
+// --background: Agent::runInBackground() answers the requests on the Agent's own thread; this main thread only sends
+// the notifications and destroys the DataAgent (SIGUSR1) - both from outside the loop.
 //
 // SIGUSR1 destroys the DataAgent while the loop keeps polling: its subtree must vanish (noSuchObject), not crash.
 //
@@ -16,6 +19,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "snmpwrapper_test_mib.hpp"
 
@@ -35,13 +39,15 @@ int main(int argc, char** argv) {
     config.name = "snmpwrap-data-test-agent";
     int trapEvery = 0;
     std::uint32_t bigRows = 0;
+    bool background = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--socket" && i + 1 < argc) config.agentxSocket = argv[++i];
         else if (a == "--trap-every" && i + 1 < argc) trapEvery = std::atoi(argv[++i]);
         else if (a == "--big-table" && i + 1 < argc) bigRows = static_cast<std::uint32_t>(std::atol(argv[++i]));
+        else if (a == "--background") background = true;
         else {
-            std::cerr << "usage: " << argv[0] << " [--socket s] [--trap-every s] [--big-table n]\n";
+            std::cerr << "usage: " << argv[0] << " [--socket s] [--trap-every s] [--big-table n] [--background]\n";
             return 2;
         }
     }
@@ -93,10 +99,17 @@ int main(int argc, char** argv) {
             if (written == "commitfail") throw snmpwrap::SetError(snmpwrap::ErrorStatus::CommitFailed, "injected failure");
         });
 
-        std::cerr << "data test agent connecting to " << config.agentxSocket << "\n";
-        agent->start();
+        std::cerr << "data test agent connecting to " << config.agentxSocket << (background ? " (background loop)" : "") << "\n";
+        if (background) agent->runInBackground();
+        else agent->start();
+        // with the background loop this loop only does the application's own work; poll() is not called
+        const auto step = [&] {
+            if (!background) return agent->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return true;
+        };
         auto nextTrap = std::chrono::steady_clock::now() + std::chrono::seconds(trapEvery);
-        while (!g_stop && agent->poll()) {
+        while (!g_stop && step()) {
             if (g_remove.exchange(false) && adapter) {
                 adapter.reset();
                 std::cerr << "DataAgent destroyed\n";
@@ -109,10 +122,12 @@ int main(int argc, char** argv) {
                     name = data.swtScalars.swtName;
                     limit = data.swtScalars.swtLimit;
                 }
-                sendSwtAlarm(*agent, name, limit);  // generated, typed
+                sendSwtAlarm(*agent, name, limit);  // generated, typed (background: queued for the loop thread)
                 nextTrap += std::chrono::seconds(trapEvery);
             }
         }
+        agent->stop();
+        agent->wait();  // background: no callback runs after this, the DataAgent and the data can go
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
         return 1;

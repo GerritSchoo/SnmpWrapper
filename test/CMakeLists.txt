@@ -99,6 +99,8 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
         # The same suite runs against every implementation of SNMPWRAPPER-TEST-MIB:
         #   integration          - integration/agents/TestAgent.cpp (hand-written OIDs, core Mib API)
         #   integration_data     - integration/agents/DataTestAgent.cpp (the generated Data structure)
+        #   integration_background - the same agent with --background: Agent::runInBackground(), notifications and
+        #                          the removal of the DataAgent come from another thread
         #                          + the generated Remote client (remote_client_check)
         add_executable(test_agent integration/agents/TestAgent.cpp)
         target_link_libraries(test_agent PRIVATE snmpwrap::snmpwrap)
@@ -107,7 +109,7 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
         add_executable(remote_client_check integration/agents/RemoteClientCheck.cpp)
         target_link_libraries(remote_client_check PRIVATE snmpwrapper_test_mib)
 
-        foreach(variant "integration:test_agent" "integration_data:data_test_agent")
+        foreach(variant "integration:test_agent" "integration_data:data_test_agent" "integration_background:data_test_agent")
             string(REPLACE ":" ";" parts "${variant}")
             list(GET parts 0 test_name)
             list(GET parts 1 agent_target)
@@ -119,6 +121,8 @@ if(SNMPWRAP_BUILD_EXAMPLES AND UNIX)
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 120 RESOURCE_LOCK snmpd_ports LABELS integration)
         endforeach()
         set_property(TEST integration_data PROPERTY ENVIRONMENT "EXTRA_CHECK=$<TARGET_FILE:remote_client_check>")
+        set_property(TEST integration_background PROPERTY ENVIRONMENT
+                     "EXTRA_CHECK=$<TARGET_FILE:remote_client_check>" "AGENT_ARGS=--background")
 
         # example applications (examples/apps): agent_app + client_app against a private snmpd
         if(TARGET agent_app AND TARGET client_app)

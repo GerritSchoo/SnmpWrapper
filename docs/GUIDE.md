@@ -520,7 +520,12 @@ notifications.onAppLimitExceeded([](const mib::AppLimitExceeded& n) {
 notifications.onOther([](const snmpwrap::Notification& n) { /* notifications of other MIBs */ });
 
 while (running) receiver->poll();                               // or receiver->run() until receiver->stop()
+// or: receiver->runInBackground();  ...  receiver->stop(); receiver->wait();   - a thread of its own, no loop here
 ```
+
+The handlers are callbacks on the thread that calls `poll()` / `run()`; after `runInBackground()` on the receiver's own
+thread, so what they touch must be thread-safe. `onNotification()` and `acceptCommunities()` may be called from any thread,
+also while it runs; `stop()` ends `run()` and the background loop at once.
 
 In snmpd.conf: `trap2sink <address> public` (SNMPv2c), `trapsink` (SNMPv1, converted back automatically) or
 `informsink` (acknowledged by the receiver). Every notification has `raw` with sender, community, version and all varbinds.
@@ -564,16 +569,52 @@ Rules (Net-SNMP keeps process-wide state):
 
 * **One `Agent` per process.** `poll()`, the adapter's hooks and `send…()` belong to the thread running the loop.
 * **Other threads** may change `data` only while holding `adapter.lock()` (a `std::unique_lock`, released at the end of its
-  scope). Never keep it across `poll()`. They never call snmpwrap functions themselves – they set a flag or queue an event,
-  and the loop sends the notification (see `agent_app`).
+  scope). Never keep it across `poll()`. With your own loop they never call snmpwrap functions themselves – they set a flag
+  or queue an event, and the loop sends the notification (see `agent_app`). With `runInBackground()` (below) they may.
 * **Agent and client in one program** works, with a few rules – see [below](#agent-and-client-in-one-program).
 * `poll(false)` returns immediately, for integration into an existing event loop. `agent->stop()` ends `poll()` / `run()`
   from another thread.
 * If snmpd restarts, the agent reconnects by itself (AgentX ping every `AgentConfig::pingIntervalSec` seconds).
 
+### Without a loop of your own: `runInBackground()`
+
+When the application's main loop lives elsewhere, the Agent runs its loop on a thread of its own:
+
+```cpp
+auto agent = std::make_shared<snmpwrap::Agent>(config);
+mib::Data data;
+auto adapter = std::make_unique<mib::DataAgent>(agent, data);
+agent->runInBackground();                                // returns at once; requests are answered from now on
+
+// any thread, at any time:
+{ auto guard = adapter->lock(); data.appSensors.appLimit = 40; }   // data changes, as before under the lock
+mib::sendAppLimitExceeded(*agent, …);                    // notifications: handed to the loop, sent right away
+
+// at the end:
+agent->stop();
+agent->wait();                                           // the loop has ended: no callback runs any more
+adapter.reset();                                         // now data and adapter can go
+```
+
+| | `run()` | `poll()` in your loop | `runInBackground()` |
+|---|---|---|---|
+| thread | the caller's, blocked until `stop()` | yours, between your work | the Agent's own |
+| `send…()` from other threads | no | no (set a flag, the loop sends) | yes |
+| create / destroy `DataAgent` from other threads | no | no | yes (the caller waits until the loop did it) |
+| callbacks (`onSet`, `onChanged`, `onGet`, …) run on | the caller's thread | your loop's thread | the background thread |
+
+* `addHandler()`, `addMib()`, `removeHandler()`, `removeMib()` – and so creating and destroying a `DataAgent` – run on the
+  loop thread; the caller waits for the result, errors included. Do not hold `adapter->lock()` meanwhile (the loop may need
+  it to answer a request).
+* The callbacks run on the background thread: what they touch must be thread-safe.
+* `poll()` and `run()` are refused while the loop runs in the background; `stop()` ends it (also from a signal handler),
+  `wait()` waits for its end. A stopped Agent does not start again. The destructor of the Agent calls `stop()` and `wait()`.
+* Notifications queued before `stop()` are still sent.
+
 ### Ending an adapter at run time
 
-Reconfiguration, a module that is switched off: destroy the `DataAgent` on the loop thread and keep polling. Its subtree
+Reconfiguration, a module that is switched off: destroy the `DataAgent` on the loop thread (with `runInBackground()`: on
+any thread) and keep polling. Its subtree
 disappears from snmpd (managers get noSuchObject), and nothing touches its `data` any more – a SET that is still in
 progress then fails cleanly. The `Data` and the `Agent` must outlive the adapter; a new `DataAgent` for the same MIB can
 follow right away. Without the generated code: `agent->removeMib(*mib)` / `agent->removeHandler(root)`.

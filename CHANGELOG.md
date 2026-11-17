@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Changed
+- Generated `DataAgent` and `registerMib()` build their `Mib` completely before they register it (`IRegistry::addHandler`,
+  was `addMib` and filling it afterwards): a request answered on another thread can no longer see a half-built subtree.
 - **Breaking:** dependencies are passed as `std::shared_ptr` to an interface in the constructor, so tests can pass mocks:
   - `DataAgent(std::shared_ptr<Registry>, Data&)`, `DataAgent(std::shared_ptr<MibBuilder>, Data&)` (was `Agent&` / `Mib&`);
     the DataAgent keeps the agent / Mib alive.
@@ -59,6 +61,15 @@
   throws `Error` instead of leading to undefined behaviour.
 
 ### Added
+- `Agent::runInBackground()`: the request loop on a thread of the Agent's own, for applications whose main loop lives
+  elsewhere. `sendTrap()` (and the generated `send…()`) may then be called from any thread – the notification is handed to
+  the loop, which a wake-up pipe lets send it at once; `addHandler()` / `addMib()` / `removeHandler()` / `removeMib()`, and
+  so creating and destroying a `DataAgent`, run on the loop thread while the caller waits for the result.
+  `Agent::wait()` waits for the end of the loop after `stop()`; `stop()` ends the background loop at once instead of at the next
+  1 s heartbeat. Test `integration_background` runs the whole integration suite against it.
+- `NotificationReceiver::runInBackground()` / `wait()`: receiving on a thread of the receiver's own, the handlers run there.
+  `onNotification()` and `acceptCommunities()` are thread-safe (also while it runs, also from inside a handler);
+  `stop()` ends `run()` and the background loop at once (wake-up pipe) instead of after up to a second.
 - `SessionConfig::localAddress`: a client's own source address ("192.168.1.5" or "192.168.1.5:5000", IPv6 as
   "[fe80::1]:5000") for hosts with several interfaces. UDP only (refused with a TCP peer); an address that is not this
   host's, or a port in use, is a `TransportError`. Set for that one `Client` only.

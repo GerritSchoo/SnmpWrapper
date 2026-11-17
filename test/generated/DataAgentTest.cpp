@@ -483,25 +483,27 @@ TEST(DataAgentImportedTypes, SingleGroupWithTypesFromAnotherMib) {
 
 using ::testing::_;
 using ::testing::Ref;
-using ::testing::Return;
 using ::testing::StrictMock;
 using ::testing::Throw;
 
-TEST(DataAgentRegistry, RegistersAtTheRootAndRemovesItsMibAgain) {
+TEST(DataAgentRegistry, RegistersACompleteMibAtTheRootAndRemovesItAgain) {
     auto registry = std::make_shared<StrictMock<MockRegistry>>();
-    auto served = std::make_shared<Mib>(m::oids::root);
+    std::shared_ptr<IHandler> served;
     m::Data data = validData();
-    EXPECT_CALL(*registry, addMib(m::oids::root)).WillOnce(Return(served));
+    // the Mib is complete when it is registered: the agent may answer requests on its own thread at once
+    EXPECT_CALL(*registry, addHandler(m::oids::root, _)).WillOnce([&](const Oid&, std::shared_ptr<IHandler> h) {
+        EXPECT_EQ(h->get(scalar(m::oids::boatName)), Value::string("aurora"));
+        served = std::move(h);
+    });
     {
         m::DataAgent adapter(registry, data);
-        EXPECT_EQ(served->get(scalar(m::oids::boatName)), Value::string("aurora"));  // the Mib it got serves the data
-        EXPECT_CALL(*registry, removeMib(Ref(*served)));
+        ASSERT_TRUE(served);
+        EXPECT_CALL(*registry, removeMib(::testing::Truly([&](const Mib& mib) { return &mib == served.get(); })));
     }
 }
 
 TEST(DataAgentRegistry, KeepsTheRegistryAlive) {
     auto registry = std::make_shared<::testing::NiceMock<MockRegistry>>();
-    ON_CALL(*registry, addMib(_)).WillByDefault(Return(std::make_shared<Mib>(m::oids::root)));
     std::weak_ptr<MockRegistry> watch = registry;
     m::Data data;
     m::DataAgent adapter(registry, data);
@@ -511,18 +513,9 @@ TEST(DataAgentRegistry, KeepsTheRegistryAlive) {
 
 TEST(DataAgentRegistry, RegistrationErrorIsPassedOn) {
     auto registry = std::make_shared<StrictMock<MockRegistry>>();
-    EXPECT_CALL(*registry, addMib(_)).WillOnce(Throw(Error("already registered")));
+    EXPECT_CALL(*registry, addHandler(_, _)).WillOnce(Throw(Error("already registered")));
     m::Data data;
     EXPECT_THROW(m::DataAgent(registry, data), Error);  // StrictMock: no removeMib
-}
-
-TEST(DataAgentRegistry, AMibThatCannotTakeTheObjectsIsRemovedAgain) {  // no half-registered subtree
-    auto registry = std::make_shared<StrictMock<MockRegistry>>();
-    auto wrongRoot = std::make_shared<Mib>(Oid({1, 3, 6, 1, 4, 1, 1}));  // not above the objects of the MIB
-    EXPECT_CALL(*registry, addMib(_)).WillOnce(Return(wrongRoot));
-    EXPECT_CALL(*registry, removeMib(Ref(*wrongRoot)));
-    m::Data data;
-    EXPECT_THROW(m::DataAgent(registry, data), Error);
 }
 
 TEST(DataAgentRegistry, NullRegistryIsAnError) {
@@ -532,7 +525,6 @@ TEST(DataAgentRegistry, NullRegistryIsAnError) {
 
 TEST(DataAgentRegistry, RemoveErrorInTheDestructorIsSwallowed) {
     auto registry = std::make_shared<::testing::NiceMock<MockRegistry>>();
-    ON_CALL(*registry, addMib(_)).WillByDefault(Return(std::make_shared<Mib>(m::oids::root)));
     ON_CALL(*registry, removeMib(_)).WillByDefault(Throw(Error("gone")));
     m::Data data;
     EXPECT_NO_THROW({ m::DataAgent adapter(registry, data); });

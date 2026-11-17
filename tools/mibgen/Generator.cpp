@@ -2011,13 +2011,10 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
     if (mod.hasRoot) {
         w("std::shared_ptr<snmpwrap::Mib> registerMib(snmpwrap::IRegistry& agent, std::shared_ptr<IInstrumentation> impl) {");
         w("    if (!impl) throw snmpwrap::Error(\"" + mod.ns + "::registerMib: implementation is null\");");
-        w("    std::shared_ptr<snmpwrap::Mib> mib = agent.addMib(oids::root);");
-        w("    try {");
-        w("        bindTo(*mib, impl);");
-        w("    } catch (...) {");
-        w("        agent.removeMib(*mib);  // no half-registered subtree");
-        w("        throw;");
-        w("    }");
+        w("    // complete before managers can reach it (the agent may answer requests on another thread already)");
+        w("    auto mib = std::make_shared<snmpwrap::Mib>(oids::root);");
+        w("    bindTo(*mib, impl);");
+        w("    agent.addHandler(oids::root, mib);");
         w("    return mib;");
         w("}");
         w();
@@ -2412,13 +2409,11 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
         w("DataAgent::DataAgent(std::shared_ptr<snmpwrap::IRegistry> agent, Data& data)");
         w("    : impl_(std::make_shared<Impl>(data)), registry_(std::move(agent)) {");
         w("    if (!registry_) throw snmpwrap::Error(\"" + mod.ns + "::DataAgent: agent is null\");");
-        w("    ownMib_ = registry_->addMib(oids::root);");
-        w("    try {");
-        w("        attach(*ownMib_, impl_);");
-        w("    } catch (...) {");
-        w("        registry_->removeMib(*ownMib_);  // no half-registered subtree");
-        w("        throw;");
-        w("    }");
+        w("    // complete before managers can reach it (the agent may answer requests on another thread already)");
+        w("    auto mib = std::make_shared<snmpwrap::Mib>(oids::root);");
+        w("    attach(*mib, impl_);");
+        w("    registry_->addHandler(oids::root, mib);");
+        w("    ownMib_ = mib;");
         w("    mib_ = ownMib_;");
         w("}");
         w();

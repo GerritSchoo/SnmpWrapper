@@ -14,6 +14,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -196,6 +198,118 @@ TEST_F(ReceiverTest, RunEndsAfterStop) {
     receiver->run();  // returns within about a second after stop()
     stopper.join();
     EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(3));
+}
+
+TEST_F(ReceiverTest, StopEndsRunAtOnce) {
+    std::thread stopper([this] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        receiver->stop();
+    });
+    const auto start = std::chrono::steady_clock::now();
+    receiver->run();
+    stopper.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(600));  // woken up, not after 1 s
+}
+
+// --- runInBackground() ------------------------------------------------------------------------
+
+/// Counts what the background thread delivers; the test thread waits for it.
+struct Counter {
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<Notification> got;
+    void add(const Notification& n) {
+        std::lock_guard<std::mutex> l(mu);
+        got.push_back(n);
+        cv.notify_all();
+    }
+    bool waitFor(std::size_t count) {
+        std::unique_lock<std::mutex> l(mu);
+        return cv.wait_for(l, std::chrono::seconds(3), [&] { return got.size() >= count; });
+    }
+};
+
+TEST(ReceiverBackground, ReceivesWithoutPollOnItsOwnThread) {
+    const int port = freeUdpPort();
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(port));
+    Counter counter;
+    std::atomic<bool> otherThread{false};
+    const auto testThread = std::this_thread::get_id();
+    receiver->onNotification([&](const Notification& n) {
+        otherThread = std::this_thread::get_id() != testThread;
+        counter.add(n);
+    });
+    receiver->runInBackground();
+    Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 1, "pump");
+    ASSERT_TRUE(counter.waitFor(1));
+    EXPECT_TRUE(otherThread);
+    EXPECT_EQ(counter.got[0].trapOid, kAlarm);
+    receiver->stop();
+    receiver->wait();
+}
+
+TEST(ReceiverBackground, AcknowledgesAnInform) {
+    const int port = freeUdpPort();
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(port));
+    receiver->runInBackground();
+    EXPECT_TRUE(Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 1, "x", true));  // waits for the acknowledgement
+}
+
+TEST(ReceiverBackground, HandlersAndCommunitiesCanBeChangedWhileItRuns) {
+    const int port = freeUdpPort();
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(port));
+    receiver->runInBackground();
+    Counter counter;
+    receiver->onNotification([&](const Notification& n) { counter.add(n); });  // added while the loop runs
+    receiver->acceptCommunities({"monitor"});
+    Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 1, "dropped");
+    Sender(port, SNMP_VERSION_2c, "monitor").v2(kAlarm, 2, "accepted");
+    ASSERT_TRUE(counter.waitFor(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::lock_guard<std::mutex> l(counter.mu);
+    ASSERT_EQ(counter.got.size(), 1u);
+    EXPECT_EQ(counter.got[0].community, "monitor");
+}
+
+TEST(ReceiverBackground, AHandlerMayAddAHandler) {
+    const int port = freeUdpPort();
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(port));
+    Counter counter;
+    std::atomic<bool> added{false};
+    receiver->onNotification([&](const Notification&) {
+        if (!added.exchange(true)) receiver->onNotification([&](const Notification& n) { counter.add(n); });  // no deadlock
+    });
+    receiver->runInBackground();
+    Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 1, "first");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    Sender(port, SNMP_VERSION_2c, "public").v2(kAlarm, 2, "second");
+    ASSERT_TRUE(counter.waitFor(1));  // the new handler got the next notification
+}
+
+TEST(ReceiverBackground, PollRunAndASecondLoopAreRefused) {
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(freeUdpPort()));
+    receiver->runInBackground();
+    EXPECT_THROW(receiver->poll(std::chrono::milliseconds(1)), Error);
+    EXPECT_THROW(receiver->run(), Error);
+    EXPECT_THROW(receiver->runInBackground(), Error);
+}
+
+TEST(ReceiverBackground, StopAndWaitEndItAtOnceAndAStoppedReceiverDoesNotStartAgain) {
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(freeUdpPort()));
+    receiver->runInBackground();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const auto start = std::chrono::steady_clock::now();
+    receiver->stop();
+    receiver->wait();
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(500));
+    EXPECT_THROW(receiver->runInBackground(), Error);
+}
+
+TEST(ReceiverBackground, TheDestructorEndsTheLoop) {
+    auto receiver = std::make_shared<NotificationReceiver>("udp:127.0.0.1:" + std::to_string(freeUdpPort()));
+    receiver->runInBackground();
+    receiver.reset();  // must neither hang nor crash
+    SUCCEED();
 }
 
 TEST_F(ReceiverTest, AnAddressInUseIsATransportError) {

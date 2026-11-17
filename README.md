@@ -36,6 +36,8 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
   Enum-Werte). Was ein Manager geändert hat, meldet der Adapter **nach dem Commit, einmal pro Anfrage** – pro Wert
   (`onChanged`), pro Tabellenzeile (`on<Tabelle>Row`) oder pro Teilbaum (`on<Gruppe>`); `onSet` prüft vorher und darf
   ablehnen, `onGet` aktualisiert Werte vor dem Lesen. Objekte werden über `enum class Object` unterschieden (`switch`).
+  Die Anfragen bearbeitet `agent->run()`, `agent->poll()` in deiner Schleife – oder `agent->runInBackground()` in einem
+  eigenen Thread des Agents; dann dürfen Traps und neue/entfernte `DataAgent`s aus jedem Thread kommen.
 * **Client:** `remote.gruppe.objekt.get()` / `.set(v)`, Tabellen per `[index]`, alles auf einmal mit `remote.read()` (als
   `Data`). Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
   beliebige Werte in einer Anfrage: `remote.change().set(…).set(…).send()`. Werte werden vor dem Senden gegen die MIB geprüft.

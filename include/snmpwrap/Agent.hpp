@@ -51,11 +51,15 @@ struct AgentConfig {
  * agent->run();   // until agent->stop() is called (e.g. from a signal handler)
  * @endcode
  *
+ * Three ways to drive it: run() (blocks the calling thread), poll() in your own loop, or runInBackground()
+ * (an internal thread; your code goes on, and sendTrap() / addMib() / removeMib() may then be called from any thread).
+ *
  * @note Net-SNMP keeps process-wide state:
  *       - only ONE Agent may exist per process at a time;
  *       - run(), poll(), addHandler(), addMib(), removeHandler(), removeMib() and sendTrap() belong to the single thread running
  *         the loop, and all IHandler / Mib callbacks are called from that thread – protect data that
  *         other threads touch with a mutex; stop() is the only thread- and signal-safe member;
+ *         after runInBackground() that thread is the Agent's own, and the members above hand their work to it;
  *       - with snmpwrap::Client in the same process, construct the Agent FIRST (the constructor
  *         throws otherwise) and do not use Clients after the Agent was destroyed (its destructor
  *         shuts the Net-SNMP library down).
@@ -72,7 +76,8 @@ public:
      */
     explicit Agent(AgentConfig config = {});
 
-    /// @brief Disconnects and shuts down the Net-SNMP library.
+    /// @brief Ends a background loop (stop() + wait()), disconnects and shuts down the Net-SNMP library.
+    /// @note Do not release the last reference to the Agent inside one of its callbacks while it runs in the background.
     ~Agent();
 
     Agent(const Agent&) = delete;
@@ -140,8 +145,43 @@ public:
      */
     bool poll(bool block = true);
 
-    /// @brief Makes run() / poll() return within about one second. Thread- and signal-safe.
+    /**
+     * @brief Starts the request loop on a thread of the Agent's own and returns at once.
+     *
+     * For applications whose main loop lives elsewhere: no run(), no poll() in your code.
+     * @code
+     * auto agent = std::make_shared<snmpwrap::Agent>(config);
+     * mib::DataAgent adapter(agent, data);
+     * agent->runInBackground();                 // requests are answered from now on
+     * ...                                       // any thread:
+     * mib::sendSomeTrap(*agent, ...);           //   notifications
+     * { auto guard = adapter.lock(); data.x = 5; }   //   data changes
+     * ...
+     * agent->stop();                            // at the end
+     * agent->wait();                            // no callback runs after this
+     * @endcode
+     * - sendTrap() (and the generated send...() functions) may then be called from any thread: from another thread the
+     *   notification is queued and sent by the loop right away.
+     * - addHandler(), addMib(), removeHandler(), removeMib() - and so creating and destroying DataAgents - may be called
+     *   from any thread as well: they run on the loop thread, the caller waits for the result (exceptions included).
+     *   Do not hold a DataAgent's lock() while doing that (the loop may need it to answer a request: deadlock).
+     * - All IHandler / Mib / DataAgent callbacks run on the background thread: what they touch must be thread-safe.
+     * - poll() and run() must not be used as well.
+     * @throws Error if the Agent already runs in the background or was stopped (a stopped Agent does not start again).
+     */
+    void runInBackground();
+
+    /// @brief Makes run() / poll() / the background loop return within about one second. Thread- and signal-safe.
     void stop() noexcept;
+
+    /**
+     * @brief Waits until the loop started by runInBackground() has ended - call stop() first (or from elsewhere).
+     *
+     * Afterwards no callback runs any more: data and DataAgents can be destroyed safely. Notifications queued
+     * before stop() are still sent. Returns at once if there is no background loop (or it ended already).
+     * @throws Error if called from the background thread itself (it would wait for itself).
+     */
+    void wait();
 
     /**
      * @brief Sends an SNMPv2 notification through the master.
@@ -151,10 +191,13 @@ public:
      * @note sysUpTime.0 and snmpTrapOID.0 are added automatically. snmpd forwards the notification
      *       to its configured sinks (trapsink = v1, trap2sink / informsink = v2c, trapsess = v3).
      *       It is dropped if the master is not connected.
+     * @note After runInBackground() any thread may call it; otherwise only the thread running the loop.
      */
     void sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars = {}) override;
 
 private:
+    void addHandlerOnLoop(const Oid& root, std::shared_ptr<IHandler> handler);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

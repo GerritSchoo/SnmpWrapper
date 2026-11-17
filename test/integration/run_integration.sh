@@ -87,7 +87,8 @@ probe() { snmpget -v2c -c public -t 1 -r 0 "$TARGET" .1.3.6.1.2.1.1.1.0 >/dev/nu
 for _ in $(seq 1 50); do probe && break; sleep 0.2; done
 probe || { echo "snmpd did not come up"; cat "$WORK/snmpd.out" "$WORK/snmpd.log" 2>/dev/null; exit 1; }
 
-"$AGENT_BIN" --socket "tcp:127.0.0.1:$XPORT" --trap-every 3 --big-table $BIG_ROWS >"$WORK/agent.out" 2>&1 &
+# AGENT_ARGS: extra options of the agent, e.g. --background
+"$AGENT_BIN" --socket "tcp:127.0.0.1:$XPORT" --trap-every 3 --big-table $BIG_ROWS ${AGENT_ARGS:-} >"$WORK/agent.out" 2>&1 &
 AGENT_PID=$!
 PIDS+=($AGENT_PID)
 

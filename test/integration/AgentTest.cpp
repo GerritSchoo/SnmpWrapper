@@ -3,7 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
+#include <thread>
+#include <vector>
 
 #include "snmpwrap/Agent.hpp"
 #include "snmpwrapper_test_mib.hpp"
@@ -92,6 +95,81 @@ TEST_F(AgentTest, ANewDataAgentCanFollowTheOldOne) {  // e.g. reconfiguration at
     auto adapter = std::make_unique<t::DataAgent>(agent, data);
     adapter.reset();
     EXPECT_NO_THROW(adapter = std::make_unique<t::DataAgent>(agent, data));
+}
+
+// --- runInBackground() ------------------------------------------------------------------------
+
+using Clock = std::chrono::steady_clock;
+
+TEST_F(AgentTest, RunInBackgroundReturnsAndStopEndsTheLoopAtOnce) {
+    agent->runInBackground();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // the loop is waiting in select()
+    const auto t0 = Clock::now();
+    agent->stop();
+    agent->wait();
+    EXPECT_LT(Clock::now() - t0, std::chrono::milliseconds(500));  // woken up, not only at the 1 s heartbeat
+}
+
+TEST_F(AgentTest, RegistrationsFromAnotherThreadRunOnTheLoopAndPassErrorsOn) {
+    agent->runInBackground();
+    auto mib = std::make_shared<Mib>(kRoot);
+    mib->scalar(1, constant(1));  // complete before it is registered
+    agent->addHandler(kRoot, mib);
+    EXPECT_THROW(agent->addMib(kRoot), Error);  // the exception of the loop thread reaches the caller
+    agent->removeMib(*mib);
+    EXPECT_THROW(agent->removeHandler(kRoot), Error);
+    EXPECT_NO_THROW(agent->addMib(kRoot));  // removed on the loop: Net-SNMP was told
+}
+
+TEST_F(AgentTest, DataAgentsComeAndGoWhileTheLoopRuns) {
+    agent->runInBackground();
+    t::Data data;
+    for (int i = 0; i < 3; ++i) {
+        t::DataAgent adapter(agent, data);
+        EXPECT_THROW(agent->addMib(t::oids::root), Error);
+    }
+    EXPECT_NO_THROW(agent->addMib(t::oids::root));  // the last one removed its subtree
+}
+
+TEST_F(AgentTest, NotificationsFromSeveralThreadsAreQueued) {
+    agent->runInBackground();
+    std::vector<std::thread> senders;
+    for (int i = 0; i < 4; ++i)
+        senders.emplace_back([this, i] {
+            for (int n = 0; n < 25; ++n) agent->sendTrap(kRoot + Oid({3, 0, 1}), {{kRoot + Oid({1, 0}), Value::integer(i)}});
+        });
+    for (auto& s : senders) s.join();
+    agent->stop();
+    agent->wait();  // the queue is sent before the loop ends (dropped here: no master)
+}
+
+TEST_F(AgentTest, PollRunAndASecondBackgroundLoopAreRefused) {
+    agent->runInBackground();
+    EXPECT_THROW(agent->poll(false), Error);
+    EXPECT_THROW(agent->run(), Error);
+    EXPECT_THROW(agent->runInBackground(), Error);
+}
+
+TEST_F(AgentTest, AStoppedAgentDoesNotRunInBackground) {
+    agent->stop();
+    EXPECT_THROW(agent->runInBackground(), Error);
+}
+
+TEST_F(AgentTest, AfterTheLoopEndedTheCallerDoesTheWorkItself) {
+    agent->runInBackground();
+    agent->stop();
+    agent->wait();
+    EXPECT_NO_THROW(agent->addMib(kRoot));
+    EXPECT_THROW(agent->addMib(kRoot), Error);
+    EXPECT_NO_THROW(agent->sendTrap(kRoot + Oid({3, 0, 1})));
+}
+
+TEST_F(AgentTest, WaitWithoutABackgroundLoopReturnsAtOnce) { EXPECT_NO_THROW(agent->wait()); }
+
+TEST_F(AgentTest, TheDestructorEndsTheBackgroundLoop) {
+    agent->runInBackground();
+    agent.reset();  // stop() + wait() + shutdown; must neither hang nor crash
+    SUCCEED();
 }
 
 }  // namespace

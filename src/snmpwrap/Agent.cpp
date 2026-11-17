@@ -4,12 +4,21 @@
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <csignal>
+#include <deque>
+#include <functional>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "AgentDetail.hpp"
 #include "Convert.hpp"
@@ -38,6 +47,13 @@ int dispatch(netsnmp_mib_handler* nh, netsnmp_handler_registration*, netsnmp_age
 // Keeps the select() timeout finite so stop() is noticed within a second.
 void heartbeat(unsigned int, void*) {}
 
+// Read end of the wake-up pipe became readable: empty it (the wake-up itself is the point).
+void drainWakeup(int fd, void*) {
+    char buf[64];
+    while (::read(fd, buf, sizeof buf) > 0) {
+    }
+}
+
 }  // namespace
 
 struct Agent::Impl {
@@ -47,6 +63,105 @@ struct Agent::Impl {
     bool agentInitialized = false;
     std::vector<std::unique_ptr<Registration>> registrations;
     std::vector<std::shared_ptr<Mib>> mibs;
+
+    // --- background loop (runInBackground) ------------------------------------------------------
+    std::thread loopThread;
+    std::atomic<bool> background{false};          ///< runInBackground() was called (stays true after the end)
+    std::atomic<std::thread::id> loopId{};        ///< the background thread
+    std::mutex queueMu;                           ///< guards tasks, loopAlive, loopDone
+    std::condition_variable doneCv;               ///< signals loopDone
+    std::deque<std::function<void()>> tasks;      ///< work handed to the loop by other threads
+    bool loopAlive = false;                       ///< the loop still takes tasks
+    bool loopDone = false;                        ///< the loop thread no longer touches Net-SNMP
+    int wakeRead = -1;
+    std::atomic<int> wakeWrite{-1};               ///< written by wake() - also from stop(), i.e. signal handlers
+
+    bool onLoopThread() const noexcept { return std::this_thread::get_id() == loopId.load(); }
+
+    /// Lets select() in the loop return now (async-signal-safe: an atomic load and write()).
+    void wake() noexcept {
+        const int fd = wakeWrite.load();
+        if (fd >= 0) {
+            const char c = 1;
+            [[maybe_unused]] const auto n = ::write(fd, &c, 1);  // a full pipe means a wake-up is pending already
+        }
+    }
+
+    /// Hands @p task to the loop. @return False if the loop takes no more tasks (the caller then does the work).
+    bool post(std::function<void()> task) {
+        {
+            std::lock_guard<std::mutex> l(queueMu);
+            if (!loopAlive) return false;
+            tasks.push_back(std::move(task));
+        }
+        wake();
+        return true;
+    }
+
+    /// After a failed post(): waits until the ending loop no longer uses Net-SNMP, so the caller may.
+    void waitUntilLoopDone() {
+        std::unique_lock<std::mutex> l(queueMu);
+        doneCv.wait(l, [this] { return loopDone; });
+    }
+
+    /// Runs the queued tasks on the loop thread. Tasks report their own errors; nothing escapes from here.
+    void runTasks() noexcept {
+        std::deque<std::function<void()>> mine;
+        {
+            std::lock_guard<std::mutex> l(queueMu);
+            mine.swap(tasks);
+        }
+        for (auto& task : mine) {
+            try {
+                task();
+            } catch (const std::exception& e) {
+                snmp_log(LOG_ERR, "snmpwrap: background task failed: %s\n", e.what());
+            } catch (...) {
+                snmp_log(LOG_ERR, "snmpwrap: background task failed\n");
+            }
+        }
+    }
+
+    /// Runs @p f on the loop thread when the Agent runs in the background and the caller is another thread; waits for
+    /// the result and rethrows its exception. Otherwise (no background loop, or on it already) calls @p f directly.
+    template <class F>
+    auto onLoop(F&& f) -> decltype(f()) {
+        if (!background.load() || onLoopThread()) return f();
+        using Result = decltype(f());
+        std::packaged_task<Result()> task(std::forward<F>(f));
+        std::future<Result> result = task.get_future();
+        if (!post([&task] { task(); })) {  // the loop is ending: do it here once it no longer uses Net-SNMP
+            waitUntilLoopDone();
+            task();
+        }
+        return result.get();
+    }
+
+    void backgroundLoop() noexcept {
+        { std::lock_guard<std::mutex> l(queueMu); }  // runInBackground() has set loopId
+        try {
+            while (running) {
+                runTasks();
+                flushRemovals();
+                agent_check_and_process(1);  // returns on a request, a wake-up or the 1 s heartbeat
+            }
+        } catch (const std::exception& e) {
+            snmp_log(LOG_ERR, "snmpwrap: background loop ended: %s\n", e.what());
+        } catch (...) {
+            snmp_log(LOG_ERR, "snmpwrap: background loop ended\n");
+        }
+        {
+            std::lock_guard<std::mutex> l(queueMu);
+            loopAlive = false;  // from now on callers do their work themselves
+        }
+        runTasks();  // notifications queued before stop() and callers still waiting
+        unregister_readfd(wakeRead);
+        {
+            std::lock_guard<std::mutex> l(queueMu);
+            loopDone = true;
+        }
+        doneCv.notify_all();
+    }
 
     /// Unregisters removed subtrees from Net-SNMP, unless a request is being processed or still refers to them.
     void flushRemovals() {
@@ -92,6 +207,10 @@ Agent::Agent(AgentConfig config) : impl_(std::make_unique<Impl>()) {
 }
 
 Agent::~Agent() {
+    stop();
+    if (impl_->loopThread.joinable()) impl_->loopThread.join();
+    for (int fd : {impl_->wakeRead, impl_->wakeWrite.exchange(-1)})
+        if (fd >= 0) ::close(fd);
     // Also shuts down the library for Clients of this process (net-snmp state is process-wide).
     if (impl_->agentInitialized) detail::shutdownLibrary(impl_->config.name.c_str());
     SOCK_CLEANUP;
@@ -101,6 +220,10 @@ Agent::~Agent() {
 void Agent::addHandler(const Oid& root, std::shared_ptr<IHandler> handler) {
     if (!handler) throw Error("null handler");
     if (root.empty()) throw Error("empty root OID");
+    impl_->onLoop([&] { addHandlerOnLoop(root, std::move(handler)); });
+}
+
+void Agent::addHandlerOnLoop(const Oid& root, std::shared_ptr<IHandler> handler) {
     impl_->flushRemovals();  // a subtree removed just before can be registered again
 
     auto reg = std::make_unique<Registration>(root, std::move(handler));
@@ -119,25 +242,31 @@ void Agent::addHandler(const Oid& root, std::shared_ptr<IHandler> handler) {
 }
 
 void Agent::removeHandler(const Oid& root) {
-    auto& regs = impl_->registrations;
-    auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed() && r->root() == root; });
-    if (it == regs.end()) throw Error("no handler registered at " + root.str());
-    (*it)->markRemoved();
-    impl_->flushRemovals();
+    impl_->onLoop([&] {
+        auto& regs = impl_->registrations;
+        auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed() && r->root() == root; });
+        if (it == regs.end()) throw Error("no handler registered at " + root.str());
+        (*it)->markRemoved();
+        impl_->flushRemovals();
+    });
 }
 
 void Agent::removeMib(const Mib& mib) {
-    auto& regs = impl_->registrations;
-    auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed() && r->handler().get() == &mib; });
-    if (it == regs.end()) throw Error("Mib at " + mib.root().str() + " was not created by this Agent (or is removed already)");
-    (*it)->markRemoved();
-    impl_->flushRemovals();
+    impl_->onLoop([&] {
+        auto& regs = impl_->registrations;
+        auto it = std::find_if(regs.begin(), regs.end(), [&](const auto& r) { return !r->removed() && r->handler().get() == &mib; });
+        if (it == regs.end()) throw Error("Mib at " + mib.root().str() + " was not created by this Agent (or is removed already)");
+        (*it)->markRemoved();
+        impl_->flushRemovals();
+    });
 }
 
 std::shared_ptr<Mib> Agent::addMib(const Oid& root) {
     auto mib = std::make_shared<Mib>(root);
-    addHandler(root, mib);
-    impl_->mibs.push_back(mib);
+    impl_->onLoop([&] {
+        addHandlerOnLoop(root, mib);
+        impl_->mibs.push_back(mib);
+    });
     return mib;
 }
 
@@ -149,6 +278,7 @@ void Agent::start() {
 }
 
 bool Agent::poll(bool block) {
+    if (impl_->background) throw Error("the Agent runs in the background (runInBackground): do not call poll() as well");
     start();
     if (!impl_->running) return false;
     impl_->flushRemovals();
@@ -158,6 +288,7 @@ bool Agent::poll(bool block) {
 }
 
 void Agent::run() {
+    if (impl_->background) throw Error("the Agent runs in the background (runInBackground): do not call run() as well");
     start();
     while (impl_->running) {
         impl_->flushRemovals();
@@ -165,10 +296,53 @@ void Agent::run() {
     }
 }
 
-void Agent::stop() noexcept { impl_->running = false; }
+void Agent::runInBackground() {
+    Impl& im = *impl_;
+    if (im.background) throw Error("the Agent runs in the background already");
+    if (!im.running) throw Error("the Agent was stopped; a stopped Agent does not start again");
+    start();
+
+    int fds[2];
+    if (::pipe(fds) != 0) throw Error("runInBackground: cannot create the wake-up pipe");
+    for (int fd : fds) {
+        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    if (register_readfd(fds[0], drainWakeup, nullptr) != FD_REGISTERED_OK) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        throw Error("runInBackground: Net-SNMP refused the wake-up pipe");
+    }
+    im.wakeRead = fds[0];
+    im.wakeWrite = fds[1];
+
+    std::lock_guard<std::mutex> l(im.queueMu);  // the thread waits for it before its first step
+    im.loopAlive = true;
+    try {
+        im.loopThread = std::thread([&im] { im.backgroundLoop(); });
+    } catch (...) {
+        im.loopAlive = false;
+        unregister_readfd(fds[0]);
+        throw;
+    }
+    im.loopId = im.loopThread.get_id();
+    im.background = true;
+}
+
+void Agent::stop() noexcept {
+    impl_->running = false;
+    impl_->wake();  // the background loop notices it at once, not only at the next heartbeat
+}
+
+void Agent::wait() {
+    if (!impl_->loopThread.joinable()) return;
+    if (impl_->onLoopThread()) throw Error("Agent::wait() called from the background thread itself");
+    impl_->loopThread.join();
+}
 
 void Agent::sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars) {
-    start();
+    const bool foreignThread = impl_->background && !impl_->onLoopThread();
+    if (!foreignThread) start();  // in the background it is started already (and start() belongs to the loop thread)
     netsnmp_variable_list* list = nullptr;
     auto add = [&](const Oid& name, const Value& value) {
         auto n = detail::toNetOid(name);
@@ -184,8 +358,15 @@ void Agent::sendTrap(const Oid& trapOid, const std::vector<VarBind>& vars) {
         snmp_free_varbind(list);
         throw;
     }
-    send_v2trap(list);
-    snmp_free_varbind(list);
+    // The list is plain memory, built above in the calling thread (encoding errors are thrown there); sending it
+    // uses Net-SNMP's sessions and belongs to the loop thread.
+    auto send = [list] {
+        send_v2trap(list);
+        snmp_free_varbind(list);
+    };
+    if (foreignThread && impl_->post(send)) return;  // queued, the loop sends it right away
+    if (foreignThread) impl_->waitUntilLoopDone();   // the loop is ending: send it here once it is done
+    send();
 }
 
 }  // namespace snmpwrap

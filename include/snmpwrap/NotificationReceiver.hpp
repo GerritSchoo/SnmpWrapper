@@ -29,9 +29,14 @@ namespace snmpwrap {
  * while (running) receiver.poll();                         // or receiver.run() until stop()
  * @endcode
  *
+ * The handlers are callbacks: they run on the thread that calls poll() / run() - or, after runInBackground(), on the
+ * receiver's own thread. The generated `Notifications` class registers itself as such a handler and calls the typed
+ * on<Notification>() hooks.
+ *
  * @warning Without acceptCommunities() every v1 / v2c notification reaches the handlers (and every inform is
  *          acknowledged), whoever sends it: anyone who can send UDP packets to the address can trigger them.
- * @note Like Client: use it from one thread. With an Agent in the same process, create the Agent first.
+ * @note Like Client: use it from one thread - except onNotification(), acceptCommunities(), stop() and wait(), which
+ *       may be called from any thread. With an Agent in the same process, create the Agent first.
  */
 class NotificationReceiver : public INotificationSource {
 public:
@@ -41,12 +46,13 @@ public:
      * @throws TransportError if the address cannot be opened (in use, no permission for ports < 1024).
      */
     explicit NotificationReceiver(const std::string& address = "udp:0.0.0.0:162");
+    /// @brief Ends a background loop (stop() + wait()) and closes the socket.
     ~NotificationReceiver();
     NotificationReceiver(const NotificationReceiver&) = delete;
     NotificationReceiver& operator=(const NotificationReceiver&) = delete;
 
     /// @brief Adds a handler; all handlers get every notification. Exceptions from handlers are ignored.
-    /// @param[in] handler The handler.
+    /// @param[in] handler The handler. Thread-safe; a handler may add further handlers (they get the next notification).
     void onNotification(std::function<void(const Notification&)> handler) override;
 
     /**
@@ -54,6 +60,7 @@ public:
      * @param[in] communities The accepted communities; empty = accept every notification (the default).
      * @note Other notifications are dropped before any handler runs, and informs among them are not acknowledged.
      *       Communities travel in clear text: this keeps out strangers, not attackers who can read the traffic.
+     *       Thread-safe: applies from the next notification on.
      */
     void acceptCommunities(std::vector<std::string> communities);
 
@@ -66,8 +73,30 @@ public:
 
     /// @brief Processes messages until stop() is called.
     void run();
-    /// @brief Makes run() return within about one second. Thread- and signal-safe.
+
+    /**
+     * @brief Receives on a thread of the receiver's own and returns at once: the handlers run on that thread.
+     * @code
+     * auto receiver = std::make_shared<snmpwrap::NotificationReceiver>("udp:0.0.0.0:1162");
+     * receiver->acceptCommunities({"public"});
+     * mib::Notifications notifications(receiver);
+     * notifications.onSomeTrap([](const mib::SomeTrap& t) { ... });   // runs on the receiver's thread
+     * receiver->runInBackground();
+     * ...
+     * receiver->stop();
+     * receiver->wait();                                              // no handler runs after this
+     * @endcode
+     * poll() and run() must not be used as well. What the handlers touch must be thread-safe.
+     * @throws Error if it runs in the background already or was stopped (a stopped receiver does not start again).
+     */
+    void runInBackground();
+
+    /// @brief Makes run() / the background loop return at once. Thread- and signal-safe.
     void stop() noexcept;
+
+    /// @brief Waits until the background loop has ended (call stop() first); returns at once without one.
+    /// @throws Error if called from the receiver's own thread (inside a handler).
+    void wait();
 
 private:
     struct Impl;
