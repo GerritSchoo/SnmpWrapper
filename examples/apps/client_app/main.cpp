@@ -6,7 +6,7 @@
 //
 // The whole recipe:
 //   1. std::make_shared<snmpwrap::Client>(config)   address, version, community / SNMPv3 user
-//   2. my_app_mib::Remote remote(session)           nested like the MIB: remote.group.object.get() / .set(v),
+//   2. my_app_mib::RemoteClient remote(session)           nested like the MIB: remote.group.object.get() / .set(v),
 //                                             whole messages: remote.group.send(msg), remote.table[i].send(row)
 //   3. catch TransportError (no answer), ResponseError (agent refused), SetError (MIB check, nothing sent)
 //   4. notifications from the agent: snmpwrap::NotificationReceiver + my_app_mib::Notifications
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
 
     try {
         auto session = std::make_shared<snmpwrap::Client>(cfg);  // shared with remote
-        mib::Remote remote(session);
+        mib::RemoteClient remote(session);
 
         // GET
         std::cout << "appName  = " << remote.appName.get() << "\n";

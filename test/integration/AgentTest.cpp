@@ -37,7 +37,12 @@ protected:
 
 TEST_F(AgentTest, SameRootCannotBeRegisteredTwice) {
     agent->addMib(kRoot);
-    EXPECT_THROW(agent->addMib(kRoot), Error);
+    try {
+        agent->addMib(kRoot);
+        FAIL() << "no Error";
+    } catch (const Error& e) {
+        EXPECT_NE(std::string(e.what()).find("registered already"), std::string::npos) << e.what();
+    }
 }
 
 TEST_F(AgentTest, RemovedRootCanBeRegisteredAgain) {

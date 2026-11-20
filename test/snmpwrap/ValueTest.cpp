@@ -172,4 +172,29 @@ TEST(VarBind, HoldsOidAndValue) {
     EXPECT_EQ(vb.value, Value::integer(4));
 }
 
+TEST(ValueAccessError, NamesTheValueItHas) {
+    try {
+        (void)Value::string("35").asInt();
+        FAIL() << "no Error";
+    } catch (const Error& e) {
+        EXPECT_STREQ(e.what(), "value is OctetString: \"35\", not Integer");
+    }
+}
+
+TEST(UnexpectedValueError, DescribesTheMismatchAndTheLikelyCause) {
+    const Oid oid{1, 3, 6, 1, 4, 1, 99999, 2, 1, 0};
+    const UnexpectedValueError e("appLimit.0", oid, "read-write, Integer32 (0..100)", Value::string("35"), "10.0.0.5:161");
+    EXPECT_STREQ(e.what(), "appLimit.0 (1.3.6.1.4.1.99999.2.1.0) from 10.0.0.5:161: the agent sent OctetString: \"35\", but the MIB "
+                           "defines read-write, Integer32 (0..100) - the agent's data does not match the MIB (wrong type in its "
+                           "data, e.g. a simulator's .snmprec, or another version of the MIB)");
+    EXPECT_EQ(e.oid(), oid);
+    EXPECT_EQ(e.received(), Value::string("35"));
+}
+
+TEST(UnexpectedValueError, WithoutAPeer) {
+    const UnexpectedValueError e("x.0", Oid{1, 3}, "Integer32", Value::exception(Type::NoSuchObject), "");
+    EXPECT_STREQ(e.what(), "x.0 (1.3): the agent does not have this object (noSuchObject) - it does not implement this part of "
+                           "the MIB, or its view (community / user) hides it");
+}
+
 }  // namespace

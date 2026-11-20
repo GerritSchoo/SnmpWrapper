@@ -917,7 +917,7 @@ void emitImpl(W& w, const Module& mod, const Group& g, const std::string& path, 
 }
 
 // ---------------------------------------------------------------------------------------------
-// Remote (nested client view on top of the flat generated Client)
+// RemoteClient (nested client view on top of the flat remote_detail::Access)
 // ---------------------------------------------------------------------------------------------
 
 void emitRemoteHelpers(W& w) {
@@ -928,12 +928,12 @@ void emitRemoteHelpers(W& w) {
     w("template <auto Get>");
     w("class RoScalar {");
     w("public:");
-    w("    explicit RoScalar(Client& c) : c_(&c) {}");
+    w("    explicit RoScalar(Access& c) : c_(&c) {}");
     w("    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError");
     w("    auto get() const { return (c_->*Get)(); }");
     w();
     w("protected:");
-    w("    Client* c_;");
+    w("    Access* c_;");
     w("};");
     w();
     w("/// @brief Writable scalar.");
@@ -954,12 +954,12 @@ void emitRemoteHelpers(W& w) {
     w("template <class Index, auto Get>");
     w("class RoCell {");
     w("public:");
-    w("    RoCell(Client& c, const Index& index) : c_(&c), index_(index) {}");
+    w("    RoCell(Access& c, const Index& index) : c_(&c), index_(index) {}");
     w("    /// @brief GET. @return The value. @throws snmpwrap::Error, snmpwrap::TransportError, snmpwrap::ResponseError");
     w("    auto get() const { return (c_->*Get)(index_); }");
     w();
     w("protected:");
-    w("    Client* c_;");
+    w("    Access* c_;");
     w("    Index index_;");
     w("};");
     w();
@@ -978,7 +978,7 @@ void emitRemoteHelpers(W& w) {
     w("};");
     w();
     w("/**");
-    w(" * @brief Several values in ONE SET request: the agent writes all of them or none (see Remote::change()).");
+    w(" * @brief Several values in ONE SET request: the agent writes all of them or none (see RemoteClient::change()).");
     w(" * Every value is checked against the MIB when it is added (snmpwrap::SetError).");
     w(" */");
     w("class Change {");
@@ -1006,14 +1006,14 @@ void emitRemoteHelpers(W& w) {
 }
 
 std::string remoteScalarType(const MibNode& n) {
-    const std::string get = "&Client::" + ident(n.name);
-    return n.writable() ? "remote_detail::RwScalar<" + get + ", &Client::set" + upperFirst(n.name) + ", &Client::make" + upperFirst(n.name) + ">"
+    const std::string get = "&remote_detail::Access::" + ident(n.name);
+    return n.writable() ? "remote_detail::RwScalar<" + get + ", &remote_detail::Access::set" + upperFirst(n.name) + ", &remote_detail::Access::make" + upperFirst(n.name) + ">"
                         : "remote_detail::RoScalar<" + get + ">";
 }
 
 std::string remoteCellType(const Table& t, const MibNode& c) {
-    const std::string get = "&Client::" + ident(c.name);
-    return c.writable() ? "remote_detail::RwCell<" + t.indexType + ", " + get + ", &Client::set" + upperFirst(c.name) + ", &Client::make" + upperFirst(c.name) + ">"
+    const std::string get = "&remote_detail::Access::" + ident(c.name);
+    return c.writable() ? "remote_detail::RwCell<" + t.indexType + ", " + get + ", &remote_detail::Access::set" + upperFirst(c.name) + ", &remote_detail::Access::make" + upperFirst(c.name) + ">"
                         : "remote_detail::RoCell<" + t.indexType + ", " + get + ">";
 }
 
@@ -1031,12 +1031,12 @@ void emitRemoteTable(W& w, const Table& t) {
     w("class " + row + " {");
     w("public:");
     w("    /// @brief Binds to a row. @param[in] c The typed client. @param[in] index Row index.");
-    w("    " + row + "(Client& c, " + ip + ") : " + init + " {}");
+    w("    " + row + "(remote_detail::Access& c, " + ip + ") : " + init + " {}");
     w();
     for (const MibNode* c : t.columns) w("    " + remoteCellType(t, *c) + " " + ident(c->name) + ";  ///< " + c->name + " (" + accessText(*c) + ")");
     if (t.rowStatus)
-        w("    remote_detail::RwCell<" + t.indexType + ", &Client::" + ident(t.rowStatus->name) + ", &Client::set" + upperFirst(t.rowStatus->name) +
-          ", &Client::make" + upperFirst(t.rowStatus->name) + "> " + ident(t.rowStatus->name) + ";  ///< " + t.rowStatus->name + " (RowStatus)");
+        w("    remote_detail::RwCell<" + t.indexType + ", &remote_detail::Access::" + ident(t.rowStatus->name) + ", &remote_detail::Access::set" + upperFirst(t.rowStatus->name) +
+          ", &remote_detail::Access::make" + upperFirst(t.rowStatus->name) + "> " + ident(t.rowStatus->name) + ";  ///< " + t.rowStatus->name + " (RowStatus)");
     w();
     w("    /// @brief The row index. @return The index this row is bound to.");
     w("    const " + t.indexType + "& index() const { return index_; }");
@@ -1055,7 +1055,7 @@ void emitRemoteTable(W& w, const Table& t) {
     w();
     w("private:");
     w("    " + t.indexType + " index_;");
-    w("    Client* c_;");
+    w("    remote_detail::Access* c_;");
     w("};");
     w();
     // table proxy
@@ -1063,7 +1063,7 @@ void emitRemoteTable(W& w, const Table& t) {
     w("/// @brief " + t.table->name + " on the remote agent: table[index] gives a row, read() fetches the whole table.");
     w("class " + tt + " {");
     w("public:");
-    w("    explicit " + tt + "(Client& c) : c_(&c) {}");
+    w("    explicit " + tt + "(remote_detail::Access& c) : c_(&c) {}");
     w("    /// @brief Row access (nothing is sent until a cell is read or written). @param[in] index Row index. @return The row.");
     w("    " + row + " operator[](" + ip + ") const { return " + row + "(*c_, index); }");
     if (plainIntegerIndex(t)) {
@@ -1082,7 +1082,7 @@ void emitRemoteTable(W& w, const Table& t) {
     }
     w();
     w("private:");
-    w("    Client* c_;");
+    w("    remote_detail::Access* c_;");
     w("};");
     w();
 }
@@ -1120,19 +1120,20 @@ void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::str
         emitRemoteGroupBody(inner, mod, c, pad + "    ", sub, cq);
         std::vector<std::string> paths;
         writableScalarPaths(c, "", paths);
-        if (!paths.empty()) sub.push_back("c_(&c)");
+        sub.push_back("c_(&c)");  // read() and send()
         std::string list;
         for (std::size_t i = 0; i < sub.size(); ++i) list += (i ? ", " : "") + sub[i];
         w(pad + "/// @brief Group " + c.mibName + (c.description.empty() ? "" : ": " + doc(c.description)));
         w(pad + "struct " + c.type + " {");
-        w(pad + "    explicit " + c.type + "(Client& c) : " + list + " {}");
+        w(pad + "    explicit " + c.type + "(remote_detail::Access& c) : " + list + " {}");
         std::string body = inner.str();
         if (!body.empty() && body.back() == '\n') body.pop_back();
         w(body);
-        if (!paths.empty()) {
-            emitRemoteSend(w, c, pad + "    ", cq, "c_->session()");
-            w(pad + "    Client* c_;");
-        }
+        w(pad + "    /// @brief Reads every value of this subtree (scalars, sub-groups, tables) in one walk (GETBULK on v2c / v3).");
+        w(pad + "    /// @return What the agent has below " + c.mibName + ". @throws snmpwrap::TransportError, snmpwrap::ResponseError");
+        w(pad + "    " + cq + " read() const;");
+        emitRemoteSend(w, c, pad + "    ", cq, "c_->session()");
+        w(pad + "    remote_detail::Access* c_;");
         w(pad + "} " + c.member + ";");
         init.push_back(c.member + "(c)");
     }
@@ -1144,6 +1145,74 @@ void emitRemoteGroupBody(W& w, const Module& mod, const Group& g, const std::str
         const Table& t = mod.tables[i];
         w(pad + remoteTableType(t) + " " + memberName(t.table->name) + ";  ///< " + t.table->name + ": " + doc(t.table->description));
         init.push_back(memberName(t.table->name) + "(c)");
+    }
+}
+
+/// Definition of a read(): walks @p walkRoot and fills `d` (of type @p dataType) with every scalar and table of the
+/// subtree @p g; the paths are relative to @p g.
+void emitRemoteRead(W& w, const Module& mod, const Group& g, const std::string& signature, const std::string& dataType,
+                    const std::string& session, const std::string& walkRoot) {
+    std::map<const MibNode*, std::string> scalarPaths;
+    std::map<std::size_t, std::string> tablePaths;
+    collectPaths(mod, g, "", scalarPaths, tablePaths);
+    w(signature + " {");
+    w("    " + dataType + " d;");
+    w("    Mismatches bad;");
+    w("    " + session + "->walk(" + walkRoot + ", [&d, &bad](const snmpwrap::VarBind& vb) {");
+    w("        if (vb.value.isException()) return true;");
+    for (const MibNode* n : mod.scalars) {
+        const auto path = scalarPaths.find(n);
+        if (path == scalarPaths.end()) continue;  // not in this subtree
+        w("        if (vb.oid == oids::" + ident(n->name) + " + snmpwrap::SubId{0}) {");
+        w("            if (vb.value.fits(" + typeEnum(n->type) + ")) d." + path->second + " = " + fromValue(*n, "vb.value") + ";");
+        w("            else bad.add(\"" + n->name + ".0\", vb, " + cppString(accessText(*n)) + ");");
+        w("            return true;");
+        w("        }");
+    }
+    for (std::size_t ti = 0; ti < mod.tables.size(); ++ti) {
+        const auto path = tablePaths.find(ti);
+        if (path == tablePaths.end()) continue;
+        const Table& t = mod.tables[ti];
+        const std::string entry = "oids::" + ident(t.entry->name);
+        w("        if (" + entry + ".isPrefixOf(vb.oid) && vb.oid.size() > " + entry + ".size() + 1) {");
+        w("            const auto i = " + t.indexType + "::fromOid(cellIndex(" + entry + ", vb.oid));");
+        w("            if (!i) return true;");
+        w("            " + t.entryType + "& row = d." + path->second + "[*i];");
+        w("            switch (vb.oid[" + entry + ".size()]) {");
+        for (const MibNode* c : t.columns) {
+            w("                case " + std::to_string(c->oid.ids().back()) + ":");
+            w("                    if (vb.value.fits(" + typeEnum(c->type) + ")) row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
+            w("                    else bad.add(\"" + c->name + "\", vb, " + cppString(accessText(*c)) + ");");
+            w("                    break;");
+        }
+        if (t.rowStatus) {
+            w("                case " + std::to_string(t.rowStatus->oid.ids().back()) + ":");
+            w("                    if (vb.value.type() == snmpwrap::Type::Integer) row." + ident(t.rowStatus->name) + " = static_cast<snmpwrap::RowStatus>(vb.value.asInt());");
+            w("                    else bad.add(\"" + t.rowStatus->name + "\", vb, \"RowStatus\");");
+            w("                    break;");
+        }
+        w("                default: break;");
+        w("            }");
+        w("            return true;");
+        w("        }");
+    }
+    w("        return true;");
+    w("    });");
+    w("    bad.throwIfAny(*" + session + ");");
+    w("    return d;");
+    w("}");
+    w();
+}
+
+/// read() of every group below @p g (at OID @p oid; @p dataQual = its Data type, e.g. "Data::AttitudeGroup").
+void emitRemoteGroupReads(W& w, const Module& mod, const Group& g, const Oid& oid, const std::string& dataQual) {
+    for (const Group& c : g.children) {
+        const Oid childOid = oid + c.subid;
+        const std::string cq = dataQual + "::" + c.type;
+        const std::string remoteQual = "RemoteClient" + cq.substr(std::string("Data").size());
+        emitRemoteRead(w, mod, c, cq + " " + remoteQual + "::read() const", cq, "c_->session()",
+                       "snmpwrap::Oid" + oidInit(childOid));
+        emitRemoteGroupReads(w, mod, c, childOid, cq);
     }
 }
 
@@ -1219,7 +1288,7 @@ std::string header(const IMibInfo& m, const Module& mod, const Options& o) {
     w(" *");
     w(" * Agent side:  Data + DataAgent serve a structure; or implement IInstrumentation and call registerMib(agent, impl)");
     w(" *              for values that live elsewhere. Notifications: send<Name>(agent, ...).");
-    w(" * Client side: Remote (nested like Data) on top of an snmpwrap::Client; Client is the flat layer underneath.");
+    w(" * Client side: RemoteClient (nested like Data) on top of an snmpwrap::Client.");
     w(" *              Received notifications: Notifications on top of an snmpwrap::NotificationReceiver.");
     w(" * Overview of everything: docs/GUIDE.md, section 11.");
     w(" * All OIDs, types, ranges, enumerations and index layouts come from the MIB.");
@@ -1277,7 +1346,7 @@ std::string header(const IMibInfo& m, const Module& mod, const Options& o) {
         w("/// @brief Writes the index values, e.g. `3, \"port\"`. @return @p os.");
         w("std::ostream& operator<<(std::ostream& os, const " + t.indexType + "& v);");
         w();
-        w("/// @brief All readable columns of one row of " + t.table->name + " (as read by Client).");
+        w("/// @brief All readable columns of one row of " + t.table->name + " (as read by RemoteClient).");
         w("struct " + t.entryType + " {");
         for (const MibNode* c : t.columns) w("    " + cppType(*c) + " " + ident(c->name) + "{};  ///< " + c->name);
         if (t.rowStatus) w("    snmpwrap::RowStatus " + ident(t.rowStatus->name) + "{};  ///< " + t.rowStatus->name);
@@ -1410,19 +1479,22 @@ std::string header(const IMibInfo& m, const Module& mod, const Options& o) {
         w();
     }
 
-    // --- Client
+    // --- the flat layer under RemoteClient (internal)
+    w("namespace remote_detail {");
+    w();
     w("/**");
-    w(" * @brief Typed client access to " + mod.name + " on top of an snmpwrap::Client.");
+    w(" * @brief Internal: one function per object of " + mod.name + " on top of an snmpwrap::ISession - the layer");
+    w(" *        RemoteClient is built on. Use RemoteClient.");
     w(" *");
     w(" * Setters check values against the MIB before anything is sent (snmpwrap::SetError).");
     w(" * Getters throw snmpwrap::Error if the agent has no such object / instance.");
     w(" */");
-    w("class Client {");
+    w("class Access {");
     w("public:");
     w("    /// @brief Uses a session (shared: it stays alive as long as this object). @param[in] session snmpwrap::Client or a mock.");
     w("    /// @throws snmpwrap::Error if @p session is null.");
-    w("    explicit Client(std::shared_ptr<snmpwrap::ISession> session) : c_(std::move(session)) {");
-    w("        if (!c_) throw snmpwrap::Error(\"" + mod.ns + "::Client: session is null\");");
+    w("    explicit Access(std::shared_ptr<snmpwrap::ISession> session) : c_(std::move(session)) {");
+    w("        if (!c_) throw snmpwrap::Error(\"" + mod.ns + "::RemoteClient: session is null\");");
     w("    }");
     w("    /// @brief The session underneath. @return The session passed to the constructor.");
     w("    const std::shared_ptr<snmpwrap::ISession>& session() const { return c_; }");
@@ -1475,6 +1547,8 @@ std::string header(const IMibInfo& m, const Module& mod, const Options& o) {
     w("private:");
     w("    std::shared_ptr<snmpwrap::ISession> c_;");
     w("};");
+    w();
+    w("}  // namespace remote_detail");
     w();
 
     // --- Data model + DataAgent
@@ -1619,21 +1693,21 @@ std::string header(const IMibInfo& m, const Module& mod, const Options& o) {
         w(" * anything is sent. Tables: remote.<table>[index] for one row, remote.<table>.read() for all rows.");
         w(" * @code");
         w(" * auto session = std::make_shared<snmpwrap::Client>(config);");
-        w(" * " + mod.ns + "::Remote remote(session);");
+        w(" * " + mod.ns + "::RemoteClient remote(session);");
         w(" * auto v = remote.<group>.<object>.get();");
         w(" * remote.<group>.<table>[1].<column>.set(v);");
         w(" * @endcode");
         w(" * @note Not copyable; keeps the session alive (shared). Like snmpwrap::Client: one per thread. In tests pass a");
-        w(" *       mock of snmpwrap::ISession instead of a Client.");
+        w(" *       mock of snmpwrap::ISession instead of an snmpwrap::Client.");
         w(" */");
-        w("class Remote {");
-        w("    Client flat_;  // first: every member below refers to it");
+        w("class RemoteClient {");
+        w("    remote_detail::Access flat_;  // first: every member below refers to it");
         w();
         w("public:");
         w("    /// @brief Wraps a session (snmpwrap::Client or a mock of snmpwrap::ISession). @param[in] session Must outlive this object.");
-        w("    explicit Remote(std::shared_ptr<snmpwrap::ISession> session) : " + list + " {}");
-        w("    Remote(const Remote&) = delete;");
-        w("    Remote& operator=(const Remote&) = delete;");
+        w("    explicit RemoteClient(std::shared_ptr<snmpwrap::ISession> session) : " + list + " {}");
+        w("    RemoteClient(const RemoteClient&) = delete;");
+        w("    RemoteClient& operator=(const RemoteClient&) = delete;");
         w();
         w("    /// @brief Reads every value of " + mod.name + " from the agent in one walk (GETBULK on v2c/v3) into a Data structure.");
         w("    /// @return All scalars and table rows the agent has. @throws snmpwrap::TransportError, snmpwrap::ResponseError");
@@ -1728,12 +1802,34 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
     w("    return mib.root().suffixOf(oid);");
     w("}");
     w();
-    w("/// Value of a Client result, or an Error for exceptions / unexpected types.");
-    w("[[maybe_unused]] const snmpwrap::Value& expect(const snmpwrap::VarBind& vb, snmpwrap::Type type, const char* name) {");
+    w("/// Value of a session result, or an Error for exceptions / unexpected types.");
+    w("[[maybe_unused]] const snmpwrap::Value& expect(const snmpwrap::ISession& session, const snmpwrap::VarBind& vb, snmpwrap::Type type,");
+    w("                                              const char* name, const std::string& expected) {");
     w("    if (!vb.value.fits(type))");
-    w("        throw snmpwrap::Error(std::string(name) + \": agent returned \" + vb.value.str());");
+    w("        throw snmpwrap::UnexpectedValueError(name, vb.oid, expected, vb.value, session.peer());");
     w("    return vb.value;");
     w("}");
+    w();
+    w("/// Values of a walk that do not fit the MIB: read() reports them all at once instead of leaving fields empty.");
+    w("class Mismatches {");
+    w("public:");
+    w("    void add(const char* name, const snmpwrap::VarBind& vb, const std::string& expected) {");
+    w("        if (count_++ == 0) first_ = vb;");
+    w("        if (count_ <= 10) text_ += \"\\n  \" + snmpwrap::UnexpectedValueError::describe(name, vb.oid, expected, vb.value);");
+    w("    }");
+    w("    void throwIfAny(const snmpwrap::ISession& session) const {");
+    w("        if (count_ == 0) return;");
+    w("        const std::string from = session.peer().empty() ? std::string(\"the agent\") : session.peer();");
+    w("        std::string text = std::to_string(count_) + (count_ == 1 ? \" value\" : \" values\") + \" from \" + from + \" did not fit the MIB:\" + text_;");
+    w("        if (count_ > 10) text += \"\\n  ... and \" + std::to_string(count_ - 10) + \" more\";");
+    w("        throw snmpwrap::UnexpectedValueError(text, first_.oid, first_.value);");
+    w("    }");
+    w();
+    w("private:");
+    w("    int count_ = 0;");
+    w("    std::string text_;");
+    w("    snmpwrap::VarBind first_;");
+    w("};");
     w();
     w("/// Row-index part of a cell OID below `entry`.");
     w("[[maybe_unused]] snmpwrap::Oid cellIndex(const snmpwrap::Oid& entry, const snmpwrap::Oid& cell) {");
@@ -2035,19 +2131,19 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
     // Client
     for (const MibNode* n : mod.scalars) {
         const std::string f = ident(n->name), F = upperFirst(n->name);
-        w(cppType(*n) + " Client::" + f + "() {");
+        w(cppType(*n) + " remote_detail::Access::" + f + "() {");
         w("    const snmpwrap::VarBind vb = c_->get(oids::" + f + " + snmpwrap::SubId{0});");
-        w("    return " + fromValue(*n, "expect(vb, " + typeEnum(n->type) + ", \"" + n->name + ".0\")") + ";");
+        w("    return " + fromValue(*n, "expect(*c_, vb, " + typeEnum(n->type) + ", \"" + n->name + ".0\", " + cppString(accessText(*n)) + ")") + ";");
         w("}");
         w();
         if (n->writable()) {
-            w("snmpwrap::VarBind Client::make" + F + "(" + paramType(*n) + " value) {");
+            w("snmpwrap::VarBind remote_detail::Access::make" + F + "(" + paramType(*n) + " value) {");
             w("    snmpwrap::Value v = " + toValue(*n, "value") + ";");
             w("    " + checkFn(*n) + "(v);");
             w("    return {oids::" + f + " + snmpwrap::SubId{0}, std::move(v)};");
             w("}");
             w();
-            w("void Client::set" + F + "(" + paramType(*n) + " value) {");
+            w("void remote_detail::Access::set" + F + "(" + paramType(*n) + " value) {");
             w("    const snmpwrap::VarBind vb = make" + F + "(value);");
             w("    c_->set(vb.oid, vb.value);");
             w("}");
@@ -2057,9 +2153,10 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
     for (const Table& t : mod.tables) {
         const std::string ip = "const " + t.indexType + "& index";
         const std::string entry = "oids::" + ident(t.entry->name);
-        w("std::map<" + t.indexType + ", " + t.entryType + "> Client::" + ident(t.table->name) + "() {");
+        w("std::map<" + t.indexType + ", " + t.entryType + "> remote_detail::Access::" + ident(t.table->name) + "() {");
         w("    std::map<" + t.indexType + ", " + t.entryType + "> rows;");
-        w("    c_->walk(" + entry + ", [&rows](const snmpwrap::VarBind& vb) {");
+        w("    Mismatches bad;");
+        w("    c_->walk(" + entry + ", [&rows, &bad](const snmpwrap::VarBind& vb) {");
         w("        if (vb.oid.size() <= " + entry + ".size() + 1) return true;");
         w("        const auto i = " + t.indexType + "::fromOid(cellIndex(" + entry + ", vb.oid));");
         w("        if (!i) return true;");
@@ -2068,11 +2165,13 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
         for (const MibNode* c : t.columns) {
             w("            case " + std::to_string(c->oid.ids().back()) + ":");
             w("                if (vb.value.fits(" + typeEnum(c->type) + ")) row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
+            w("                else bad.add(\"" + c->name + "\", vb, " + cppString(accessText(*c)) + ");");
             w("                break;");
         }
         if (t.rowStatus) {
             w("            case " + std::to_string(t.rowStatus->oid.ids().back()) + ":");
             w("                if (vb.value.type() == snmpwrap::Type::Integer) row." + ident(t.rowStatus->name) + " = static_cast<snmpwrap::RowStatus>(vb.value.asInt());");
+            w("                else bad.add(\"" + t.rowStatus->name + "\", vb, \"RowStatus\");");
             w("                break;");
         }
         w("            default: break;");
@@ -2080,24 +2179,25 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
         w("        (void)row;");
         w("        return true;");
         w("    });");
+        w("    bad.throwIfAny(*c_);");
         w("    return rows;");
         w("}");
         w();
         for (const MibNode* c : t.columns) {
             const std::string f = ident(c->name);
-            w(cppType(*c) + " Client::" + f + "(" + ip + ") {");
+            w(cppType(*c) + " remote_detail::Access::" + f + "(" + ip + ") {");
             w("    const snmpwrap::VarBind vb = c_->get(oids::" + f + " + index.toOid());");
-            w("    return " + fromValue(*c, "expect(vb, " + typeEnum(c->type) + ", \"" + c->name + "\")") + ";");
+            w("    return " + fromValue(*c, "expect(*c_, vb, " + typeEnum(c->type) + ", \"" + c->name + "\", " + cppString(accessText(*c)) + ")") + ";");
             w("}");
             w();
             if (c->writable()) {
-                w("snmpwrap::VarBind Client::make" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
+                w("snmpwrap::VarBind remote_detail::Access::make" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
                 w("    snmpwrap::Value v = " + toValue(*c, "value") + ";");
                 w("    " + checkFn(*c) + "(v);");
                 w("    return {oids::" + f + " + index.toOid(), std::move(v)};");
                 w("}");
                 w();
-                w("void Client::set" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
+                w("void remote_detail::Access::set" + upperFirst(c->name) + "(" + ip + ", " + paramType(*c) + " value) {");
                 w("    const snmpwrap::VarBind vb = make" + upperFirst(c->name) + "(index, value);");
                 w("    c_->set(vb.oid, vb.value);");
                 w("}");
@@ -2106,20 +2206,20 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
         }
         if (t.rowStatus) {
             const std::string rs = ident(t.rowStatus->name);
-            w("snmpwrap::RowStatus Client::" + rs + "(" + ip + ") {");
+            w("snmpwrap::RowStatus remote_detail::Access::" + rs + "(" + ip + ") {");
             w("    const snmpwrap::VarBind vb = c_->get(oids::" + rs + " + index.toOid());");
-            w("    return static_cast<snmpwrap::RowStatus>(expect(vb, snmpwrap::Type::Integer, \"" + t.rowStatus->name + "\").asInt());");
+            w("    return static_cast<snmpwrap::RowStatus>(expect(*c_, vb, snmpwrap::Type::Integer, \"" + t.rowStatus->name + "\", \"RowStatus\").asInt());");
             w("}");
             w();
-            w("snmpwrap::VarBind Client::make" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
+            w("snmpwrap::VarBind remote_detail::Access::make" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
             w("    return {oids::" + rs + " + index.toOid(), snmpwrap::Value::integer(static_cast<std::int32_t>(status))};");
             w("}");
             w();
-            w("void Client::set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
+            w("void remote_detail::Access::set" + upperFirst(t.rowStatus->name) + "(" + ip + ", snmpwrap::RowStatus status) {");
             w("    c_->set(oids::" + rs + " + index.toOid(), snmpwrap::Value::integer(static_cast<std::int32_t>(status)));");
             w("}");
             w();
-            w("void Client::" + t.createFn + "(" + ip + ", const " + t.valuesType + "& values, bool activate) {");
+            w("void remote_detail::Access::" + t.createFn + "(" + ip + ", const " + t.valuesType + "& values, bool activate) {");
             w("    const snmpwrap::Oid idx = index.toOid();");
             w("    std::vector<snmpwrap::VarBind> sets;");
             if (t.writable().empty()) w("    (void)values;  // the table has no writable columns besides its RowStatus");
@@ -2135,7 +2235,7 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
             w("    c_->set(sets);");
             w("}");
             w();
-            w("void Client::" + t.destroyFn + "(" + ip + ") {");
+            w("void remote_detail::Access::" + t.destroyFn + "(" + ip + ") {");
             w("    c_->set(oids::" + rs + " + index.toOid(), snmpwrap::Value::integer(static_cast<std::int32_t>(snmpwrap::RowStatus::Destroy)));");
             w("}");
             w();
@@ -2346,56 +2446,17 @@ std::string source(const IMibInfo& m, const Module& mod, const Options& o) {
                 const MibNode* c = cols[i];
                 const std::string at = "vbs[" + std::to_string(i) + "]";
                 if (c == t.rowStatus)
-                    w("    e." + ident(c->name) + " = static_cast<snmpwrap::RowStatus>(expect(" + at + ", snmpwrap::Type::Integer, \"" + c->name + "\").asInt());");
+                    w("    e." + ident(c->name) + " = static_cast<snmpwrap::RowStatus>(expect(*c_->session(), " + at + ", snmpwrap::Type::Integer, \"" + c->name + "\", \"RowStatus\").asInt());");
                 else
-                    w("    e." + ident(c->name) + " = " + fromValue(*c, "expect(" + at + ", " + typeEnum(c->type) + ", \"" + c->name + "\")") + ";");
+                    w("    e." + ident(c->name) + " = " + fromValue(*c, "expect(*c_->session(), " + at + ", " + typeEnum(c->type) + ", \"" + c->name + "\", " + cppString(accessText(*c)) + ")") + ";");
             }
             w("    return e;");
             w("}");
             w();
         }
-        // Remote: everything into a Data
-        std::map<const MibNode*, std::string> scalarPaths;
-        std::map<std::size_t, std::string> tablePaths;
-        collectPaths(mod, mod.data, "", scalarPaths, tablePaths);
-        w("Data Remote::read() {");
-        w("    Data d;");
-        w("    flat_.session()->walk(oids::root, [&d](const snmpwrap::VarBind& vb) {");
-        w("        if (vb.value.isException()) return true;");
-        for (const MibNode* n : mod.scalars) {
-            w("        if (vb.oid == oids::" + ident(n->name) + " + snmpwrap::SubId{0}) {");
-            w("            if (vb.value.fits(" + typeEnum(n->type) + ")) d." + scalarPaths[n] + " = " + fromValue(*n, "vb.value") + ";");
-            w("            return true;");
-            w("        }");
-        }
-        for (std::size_t ti = 0; ti < mod.tables.size(); ++ti) {
-            const Table& t = mod.tables[ti];
-            const std::string entry = "oids::" + ident(t.entry->name);
-            w("        if (" + entry + ".isPrefixOf(vb.oid) && vb.oid.size() > " + entry + ".size() + 1) {");
-            w("            const auto i = " + t.indexType + "::fromOid(cellIndex(" + entry + ", vb.oid));");
-            w("            if (!i) return true;");
-            w("            " + t.entryType + "& row = d." + tablePaths[ti] + "[*i];");
-            w("            switch (vb.oid[" + entry + ".size()]) {");
-            for (const MibNode* c : t.columns) {
-                w("                case " + std::to_string(c->oid.ids().back()) + ":");
-                w("                    if (vb.value.fits(" + typeEnum(c->type) + ")) row." + ident(c->name) + " = " + fromValue(*c, "vb.value") + ";");
-                w("                    break;");
-            }
-            if (t.rowStatus) {
-                w("                case " + std::to_string(t.rowStatus->oid.ids().back()) + ":");
-                w("                    if (vb.value.type() == snmpwrap::Type::Integer) row." + ident(t.rowStatus->name) + " = static_cast<snmpwrap::RowStatus>(vb.value.asInt());");
-                w("                    break;");
-            }
-            w("                default: break;");
-            w("            }");
-            w("            return true;");
-            w("        }");
-        }
-        w("        return true;");
-        w("    });");
-        w("    return d;");
-        w("}");
-        w();
+        // Remote: everything into a Data, each group into its Data group
+        emitRemoteRead(w, mod, mod.data, "Data RemoteClient::read()", "Data", "flat_.session()", "oids::root");
+        emitRemoteGroupReads(w, mod, mod.data, mod.dataRoot, "Data");
         // the Mib's callbacks share the Impl: it lives as long as the Mib, also after ~DataAgent (see Impl::detached)
         w("namespace {");
         w("template <class I>");

@@ -1,4 +1,4 @@
-// The generated typed client Remote (NESTED-TEST-MIB) against a mocked ISession: OIDs, types and the MIB
+// The generated typed client RemoteClient (NESTED-TEST-MIB) against a mocked ISession: OIDs, types and the MIB
 // check come from the generated code; nothing reaches the network.
 
 #include <gmock/gmock.h>
@@ -23,7 +23,7 @@ using ::testing::Return;
 
 namespace {
 
-/// Remote on a MockSession that answers like the FakeSession `agent` unless a test sets an expectation.
+/// RemoteClient on a MockSession that answers like the FakeSession `agent` unless a test sets an expectation.
 class RemoteTest : public ::testing::Test {
 protected:
     RemoteTest() {
@@ -38,7 +38,7 @@ protected:
 
     FakeSession agent;
     std::shared_ptr<::testing::NiceMock<MockSession>> session = std::make_shared<::testing::NiceMock<MockSession>>();
-    m::Remote remote{session};
+    m::RemoteClient remote{session};
 };
 
 TEST_F(RemoteTest, GetReadsTheScalarOid) {
@@ -70,6 +70,102 @@ TEST_F(RemoteTest, ReadWalksIntoData) {
     EXPECT_EQ(snapshot.attitude.extendedRollTable.at(m::ExtendedRollEntryIndex{3}).extendedRollValue, -12);
 }
 
+TEST_F(RemoteTest, AGroupReadWalksOnlyItsSubtree) {
+    remote.attitude.extendedRollTable[3].extendedRollValue.set(-12);
+    const Oid attitude{1, 3, 6, 1, 4, 1, 99999, 300, 2};  // NESTED-TEST-MIB: attitude
+    EXPECT_CALL(*session, walk(attitude, _));
+    const m::Data::AttitudeGroup group = remote.attitude.read();
+    EXPECT_EQ(group.extendedRollTable.at(m::ExtendedRollEntryIndex{3}).extendedRollValue, -12);
+}
+
+TEST_F(RemoteTest, AGroupReadFillsScalarsAndTablesOfThatGroupOnly) {
+    remote.navigation.navigationMode.set(m::NavigationMode::automatic);
+    agent.values[cell(m::oids::extendedCourseValue, m::ExtendedCourseEntryIndex{2}.toOid())] = Value::integer(900);
+    const m::Data::NavigationGroup group = remote.navigation.read();
+    EXPECT_EQ(group.navigationMode, m::NavigationMode::automatic);
+    EXPECT_EQ(group.extendedCourseTable.at(m::ExtendedCourseEntryIndex{2}).extendedCourseValue, 900);
+    EXPECT_EQ(group.extendedCourseTable.size(), 1u);
+}
+
+// --- values that do not fit the MIB (e.g. a wrong type in a simulator's .snmprec) ---------------
+
+/// A RemoteClient on a FakeSession: the agent's values can be anything.
+struct WrongAgent {
+    std::shared_ptr<FakeSession> agent = std::make_shared<FakeSession>();
+    m::RemoteClient remote{agent};
+};
+
+TEST(RemoteClientUnexpectedValue, AWrongTypeNamesObjectOidAgentAndTheMibDefinition) {
+    WrongAgent w;
+    const Oid oid = scalar(m::oids::boatName);
+    w.agent->values[oid] = Value::integer(5);  // the MIB: DisplayString (SIZE (1..16))
+    try {
+        (void)w.remote.boatName.get();
+        FAIL() << "no UnexpectedValueError";
+    } catch (const UnexpectedValueError& e) {
+        const std::string text = e.what();
+        EXPECT_THAT(text, ::testing::HasSubstr("boatName.0 (" + oid.str() + ") from fake-agent:161"));
+        EXPECT_THAT(text, ::testing::HasSubstr("the agent sent Integer: 5"));
+        EXPECT_THAT(text, ::testing::HasSubstr("the MIB defines read-write, DisplayString SIZE(1..16)"));
+        EXPECT_THAT(text, ::testing::HasSubstr(".snmprec"));
+        EXPECT_EQ(e.oid(), oid);
+        EXPECT_EQ(e.received(), Value::integer(5));
+    }
+}
+
+TEST(RemoteClientUnexpectedValue, AMissingInstanceSaysSo) {
+    WrongAgent w;  // the fake agent has nothing: noSuchInstance
+    try {
+        (void)w.remote.attitude.extendedRollTable[7].extendedRollValue.get();
+        FAIL() << "no UnexpectedValueError";
+    } catch (const UnexpectedValueError& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("extendedRollValue (" + cell(m::oids::extendedRollValue, m::ExtendedRollEntryIndex{7}.toOid()).str()));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("no row with this index"));
+    }
+}
+
+TEST(RemoteClientUnexpectedValue, ReadReportsEveryValueThatDoesNotFitInsteadOfLeavingItEmpty) {
+    WrongAgent w;
+    w.agent->values[scalar(m::oids::boatName)] = Value::integer(5);
+    w.agent->values[cell(m::oids::extendedRollValue, m::ExtendedRollEntryIndex{1}.toOid())] = Value::string("12");
+    w.agent->values[cell(m::oids::extendedRollSensor, m::ExtendedRollEntryIndex{1}.toOid())] = Value::string("gyro");  // fits
+    try {
+        (void)w.remote.read();
+        FAIL() << "no UnexpectedValueError";
+    } catch (const UnexpectedValueError& e) {
+        const std::string text = e.what();
+        EXPECT_THAT(text, ::testing::HasSubstr("2 values from fake-agent:161 did not fit the MIB"));
+        EXPECT_THAT(text, ::testing::HasSubstr("boatName.0"));
+        EXPECT_THAT(text, ::testing::HasSubstr("extendedRollValue"));
+        EXPECT_THAT(text, ::testing::Not(::testing::HasSubstr("extendedRollSensor")));
+    }
+}
+
+TEST(RemoteClientUnexpectedValue, GroupTableAndRowReadsReportIt) {
+    WrongAgent w;
+    const Oid roll = m::ExtendedRollEntryIndex{1}.toOid();
+    w.agent->values[cell(m::oids::extendedRollValue, roll)] = Value::string("12");
+    w.agent->values[cell(m::oids::extendedRollSensor, roll)] = Value::string("gyro");
+    w.agent->values[cell(m::oids::extendedRollCounter, roll)] = Value::counter32(1);
+    w.agent->values[cell(m::oids::extendedRollTimepoint, roll)] = Value::timeTicks(1);
+    EXPECT_THROW((void)w.remote.attitude.read(), UnexpectedValueError);
+    EXPECT_THROW((void)w.remote.attitude.extendedRollTable.read(), UnexpectedValueError);
+    EXPECT_THROW((void)w.remote.attitude.extendedRollTable[1].read(), UnexpectedValueError);
+}
+
+TEST(RemoteClientUnexpectedValue, ManyValuesAreCutAfterTen) {
+    WrongAgent w;
+    for (SubId i = 1; i <= 15; ++i)
+        w.agent->values[cell(m::oids::extendedRollValue, m::ExtendedRollEntryIndex{static_cast<std::int32_t>(i)}.toOid())] = Value::string("x");
+    try {
+        (void)w.remote.attitude.extendedRollTable.read();
+        FAIL() << "no UnexpectedValueError";
+    } catch (const UnexpectedValueError& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("15 values"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("and 5 more"));
+    }
+}
+
 TEST_F(RemoteTest, EmptyAnswerIsAnError) {  // not undefined behaviour
     EXPECT_CALL(*session, get(_)).WillOnce(Return(std::vector<VarBind>{}));
     try {
@@ -93,6 +189,6 @@ TEST_F(RemoteTest, KeepsTheSessionAlive) {
     EXPECT_FALSE(watch.expired());
 }
 
-TEST(Remote, NullSessionIsAnError) { EXPECT_THROW(m::Remote(std::shared_ptr<snmpwrap::ISession>()), Error); }
+TEST(RemoteClient, NullSessionIsAnError) { EXPECT_THROW(m::RemoteClient(std::shared_ptr<snmpwrap::ISession>()), Error); }
 
 }  // namespace

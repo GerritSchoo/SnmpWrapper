@@ -67,6 +67,26 @@
   so creating and destroying a `DataAgent`, run on the loop thread while the caller waits for the result.
   `Agent::wait()` waits for the end of the loop after `stop()`; `stop()` ends the background loop at once instead of at the next
   1 s heartbeat. Test `integration_background` runs the whole integration suite against it.
+- **Error messages that name the cause:**
+  - `UnexpectedValueError` (new, an `Error`): a value of the agent does not fit the MIB - another type (e.g. a wrong
+    type in a simulator's .snmprec) or noSuchObject / noSuchInstance. The text names object, OID, agent, what the MIB
+    defines, what was sent and the likely cause; `oid()`, `received()`. Was a bare "x.0: agent returned ...".
+  - **Changed behaviour:** `read()` of the `RemoteClient` (MIB, group, table) no longer leaves such values silently
+    empty: it reads everything, then throws one `UnexpectedValueError` listing them.
+  - `ResponseError` names the agent and the refused varbind's OID (was "agent returned error: wrongValue").
+  - Timeouts name the usual causes (agent down, address / port / firewall, wrong community, unknown v3 user).
+  - A value of an unknown ASN.1 type names agent and OID; `Value::as...()` names the value it has; a duplicate
+    registration in the Agent says so instead of "code -1".
+  - `ISession::peer()` (not pure: mocks keep compiling): the agent's address for these messages.
+- **Breaking:** the generated client class `Remote` is now `RemoteClient` (the counterpart of `DataAgent`), and the flat
+  per-object class `Client` underneath it is internal (`remote_detail::Access`): one client class per MIB, no more
+  confusion with `snmpwrap::Client` (the connection). Replace `mib::Remote` with `mib::RemoteClient`; code that used the
+  flat `mib::Client` uses `RemoteClient` (`remote.<object>.get()` / `.set(v)` / `.varbind(v)`, `remote.<table>.read()`).
+- Generated `RemoteClient`: every group and sub-group has `read()` - one walk of its subtree into its `Data` group
+  (scalars, sub-groups, tables), the counterpart of `send(msg)`.
+- `SessionConfig::maxRepetitions` (default 50, was a fixed 20): values per GETBULK request in walks and the `RemoteClient`'s
+  `read()` - fewer round trips for big tables. An agent answering tooBig is asked again with half as many values
+  instead of ending the walk with an error.
 - SNMPv3 notifications: `NotificationReceiver::addUser(NotificationUser)` accepts v3 traps (`engineId` = the sender's)
   and informs of a user, at least at its `securityLevel`; `acceptOnlyV3()` drops v1 / v2c. `Notification` has `user`
   and `securityLevel`; `version` is 3. Messages whose authentication failed are dropped (Net-SNMP hands them to the

@@ -53,7 +53,15 @@ struct Client::Impl {
         const int status = snmp_sess_synch_response(handle, pdu, &response);
         PduPtr resp(response);
 
-        if (status == STAT_TIMEOUT) throw TransportError("SNMP request to " + config.peer + " timed out");
+        if (status == STAT_TIMEOUT) {
+            const bool v3 = config.version == SessionConfig::Version::V3;
+            throw TransportError("SNMP request to " + config.peer + " timed out (" + std::to_string(config.timeout.count()) +
+                                 " ms, " + std::to_string(config.retries + 1) + " tries) - is the agent running and reachable "
+                                 "(address, port, firewall)? " +
+                                 (v3 ? std::string("SNMPv3: is the user known to the agent?")
+                                     : std::string("v1 / v2c: agents silently drop a wrong community (\"") + config.community +
+                                           "\" - for SET a read-write community is needed)"));
+        }
         if (status != STAT_SUCCESS) {
             char* msg = nullptr;
             snmp_sess_error(handle, nullptr, nullptr, &msg);
@@ -109,11 +117,13 @@ std::vector<VarBind> Client::getBulk(const std::vector<Oid>& oids, int nonRepeat
 
 void Client::set(const std::vector<VarBind>& varbinds) { impl_->request(SNMP_MSG_SET, varbinds); }
 
+std::string Client::peer() const { return impl_->config.peer; }
+
 void Client::walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) {
     const bool v1 = impl_->config.version == SessionConfig::Version::V1;
-    const detail::Walker walker(root, v1, [&](const Oid& after) {
+    const detail::Walker walker(root, v1, impl_->config.maxRepetitions, [&](const Oid& after, int maxRepetitions) {
         return v1 ? impl_->request(SNMP_MSG_GETNEXT, {{after, Value::null()}})
-                  : impl_->request(SNMP_MSG_GETBULK, {{after, Value::null()}}, 0, 20);
+                  : impl_->request(SNMP_MSG_GETBULK, {{after, Value::null()}}, 0, maxRepetitions);
     });
     walker.walk(callback);
 }

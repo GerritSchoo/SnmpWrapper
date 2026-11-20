@@ -77,6 +77,10 @@ struct SessionConfig {
     std::chrono::milliseconds timeout{3000};
     /// Number of retries after a timeout (total tries = retries + 1).
     int retries = 1;
+    /// Values per GETBULK request in walks (walk(), and the generated RemoteClient's read() of the MIB, groups and tables),
+    /// v2c / v3 only: fewer round trips for bigger values. If the agent answers tooBig, the walk goes on with half as
+    /// many. At least 1.
+    int maxRepetitions = 50;
 };
 
 /**
@@ -172,6 +176,9 @@ public:
      * @note Uses GETBULK on v2c / v3 and GETNEXT on v1.
      */
     void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) override;
+
+    /// @brief The agent's address (SessionConfig::peer). @return E.g. "192.168.1.10:161".
+    std::string peer() const override;
 
 
 private:

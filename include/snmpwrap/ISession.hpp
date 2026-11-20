@@ -4,7 +4,7 @@
  *        mock.
  *
  * Program against ISession& and the network becomes replaceable in tests. The generated typed client
- * (`<mib>::Remote`) takes a ISession&, so it works with every implementation.
+ * (`<mib>::RemoteClient`) takes a ISession, so it works with every implementation.
  */
 #pragma once
 
@@ -50,6 +50,9 @@ public:
     virtual void set(const std::vector<VarBind>& varbinds) = 0;
     /// @brief Walks a subtree. @param[in] root Subtree. @param[in] callback Called in OID order; return false to stop.
     virtual void walk(const Oid& root, const std::function<bool(const VarBind&)>& callback) = 0;
+    /// @brief The agent this session talks to, named in error messages (e.g. "192.168.1.10:161").
+    /// @return The address; empty if not known (the default, e.g. for mocks).
+    virtual std::string peer() const { return {}; }
 
     /// @brief GET of one instance. @param[in] oid Instance OID. @return The varbind.
     /// @throws Error if the implementation returns no varbind.

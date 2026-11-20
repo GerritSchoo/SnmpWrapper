@@ -117,9 +117,18 @@ TEST_F(GeneratorTest, HeaderDeclaresTheWholeApi) {
     EXPECT_THAT(h, HasSubstr("inline const snmpwrap::Oid root{1, 3, 6, 1, 4, 1, 99999};"));
     EXPECT_THAT(h, HasSubstr("struct Data {"));
     EXPECT_THAT(h, HasSubstr("class DataAgent {"));
-    EXPECT_THAT(h, HasSubstr("class Remote {"));
+    EXPECT_THAT(h, HasSubstr("class RemoteClient {"));
     EXPECT_THAT(h, HasSubstr("class IInstrumentation {"));
     EXPECT_THAT(h, HasSubstr("enum class Object {"));
+}
+
+TEST_F(GeneratorTest, TheClientSideIsRemoteClientOnly) {  // the flat layer underneath is internal
+    const std::string h = gen("SNMPWRAPPER-TEST-MIB").header;
+    EXPECT_THAT(h, HasSubstr("class RemoteClient {"));
+    EXPECT_THAT(h, HasSubstr("namespace remote_detail {"));
+    EXPECT_THAT(h, HasSubstr("class Access {"));
+    EXPECT_THAT(h, ::testing::Not(HasSubstr("\nclass Client {")));
+    EXPECT_THAT(h, ::testing::Not(HasSubstr("\nclass Remote {")));
 }
 
 TEST_F(GeneratorTest, EnumsIndexesAndRowsPerTable) {
@@ -227,7 +236,7 @@ TEST_F(GeneratorTest, ObjectsOutsideTheRootAreRefused) {
 
 TEST_F(GeneratorTest, RootInsideTheModuleIsRefused) {
     // swtScalars (99999.1) holds the scalars, but the tables are at 99999.2 and up: the agent could not serve them
-    // and Remote::read() would silently miss them
+    // and RemoteClient::read() would silently miss them
     EXPECT_THAT(refusal("SNMPWRAPPER-TEST-MIB", "swtScalars"),
                 HasSubstr("object 'swtTable' (1.3.6.1.4.1.99999.2) is not below the root swtScalars (1.3.6.1.4.1.99999.1)"));
 }

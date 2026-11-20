@@ -28,13 +28,43 @@ const char* toString(Type t) noexcept {
 }
 
 namespace {
-[[noreturn]] void mismatch(Type have, const char* want) {
-    throw Error(std::string("value is ") + toString(have) + ", not " + want);
+[[noreturn]] void mismatch(const Value& have, const char* want) {
+    throw Error("value is " + have.str() + ", not " + want);
 }
 }  // namespace
 
+// --- UnexpectedValueError ------------------------------------------------------------------------
+
+std::string UnexpectedValueError::describe(const std::string& object, const Oid& oid, const std::string& expected,
+                                           const Value& received) {
+    const std::string where = object + " (" + oid.str() + ")";
+    switch (received.type()) {
+        case Type::NoSuchObject:
+            return where + ": the agent does not have this object (noSuchObject) - it does not implement this part of "
+                           "the MIB, or its view (community / user) hides it";
+        case Type::NoSuchInstance:
+            return where + ": the agent has no such instance (noSuchInstance) - for a table: no row with this index";
+        case Type::EndOfMibView:
+            return where + ": the agent has nothing here (endOfMibView)";
+        default:
+            return where + ": the agent sent " + received.str() + ", but the MIB defines " + expected +
+                   " - the agent's data does not match the MIB (wrong type in its data, e.g. a simulator's .snmprec, "
+                   "or another version of the MIB)";
+    }
+}
+
+UnexpectedValueError::UnexpectedValueError(const std::string& object, const Oid& oid, const std::string& expected,
+                                           const Value& received, const std::string& peer)
+    : UnexpectedValueError(peer.empty() ? describe(object, oid, expected, received)
+                                        : describe(object, oid, expected, received).insert(object.size() + oid.str().size() + 3,
+                                                                                           " from " + peer),
+                           oid, received) {}
+
+UnexpectedValueError::UnexpectedValueError(const std::string& message, Oid oid, Value received)
+    : Error(message), oid_(std::move(oid)), received_(std::move(received)) {}
+
 std::int32_t Value::asInt() const {
-    if (type_ != Type::Integer) mismatch(type_, "Integer");
+    if (type_ != Type::Integer) mismatch(*this, "Integer");
     return std::get<std::int32_t>(data_);
 }
 
@@ -48,7 +78,7 @@ std::uint32_t Value::asUInt() const {
             if (std::get<std::int32_t>(data_) >= 0) return static_cast<std::uint32_t>(std::get<std::int32_t>(data_));
             throw Error("negative Integer cannot be read as unsigned");
         default:
-            mismatch(type_, "an unsigned type");
+            mismatch(*this, "an unsigned type");
     }
 }
 
@@ -59,17 +89,17 @@ std::uint64_t Value::asUInt64() const {
 
 const std::string& Value::asString() const {
     if (type_ != Type::OctetString && type_ != Type::Opaque && type_ != Type::Bits)
-        mismatch(type_, "OctetString, Opaque or Bits");
+        mismatch(*this, "OctetString, Opaque or Bits");
     return std::get<std::string>(data_);
 }
 
 const Oid& Value::asOid() const {
-    if (type_ != Type::ObjectId) mismatch(type_, "ObjectId");
+    if (type_ != Type::ObjectId) mismatch(*this, "ObjectId");
     return std::get<Oid>(data_);
 }
 
 std::array<std::uint8_t, 4> Value::asIp() const {
-    if (type_ != Type::IpAddress) mismatch(type_, "IpAddress");
+    if (type_ != Type::IpAddress) mismatch(*this, "IpAddress");
     return std::get<std::array<std::uint8_t, 4>>(data_);
 }
 

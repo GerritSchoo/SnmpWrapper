@@ -11,7 +11,7 @@ your code.
                           ▼
                     my_app_mib.hpp / .cpp
                  ┌────────┴─────────┐
-   agent:  Data + DataAgent    client:  Remote
+   agent:  Data + DataAgent    client:  RemoteClient
    data.appSensors.appLimit = 30;      remote.appSensors.appLimit.set(35);
 ```
 
@@ -28,7 +28,7 @@ side on one page, plus an "I want to …" table. The headers have the details of
 2. [Adding snmpwrap to your project](#2-adding-snmpwrap-to-your-project)
 3. [Step by step: an agent and a client](#3-step-by-step-an-agent-and-a-client)
 4. [The agent: `Data` and `DataAgent`](#4-the-agent-data-and-dataagent)
-5. [The client: `Remote`](#5-the-client-remote)
+5. [The client: `RemoteClient`](#5-the-client-remoteclient)
 6. [Notifications](#6-notifications)
 7. [Main loop, threads and shutdown](#7-main-loop-threads-and-shutdown)
 8. [snmpd configuration and SNMP versions](#8-snmpd-configuration-and-snmp-versions)
@@ -61,8 +61,8 @@ What the build generates from the MIB (namespace = module name in snake_case, e.
 
 | MIB | Agent side | Client side |
 |---|---|---|
-| module | `struct Data` | `class Remote` |
-| group (OBJECT IDENTIFIER) | nested struct: `data.appSensors` | nested: `remote.appSensors` |
+| module | `struct Data` | `class RemoteClient` |
+| group (OBJECT IDENTIFIER) | nested struct: `data.appSensors` | nested: `remote.appSensors`, `.read()`, `.send(msg)` |
 | scalar | member: `data.appName` | `remote.appName.get()` / `.set(v)` |
 | table | rows by index: `data.appSensors.appSensorTable[1]` | `remote.appSensors.appSensorTable[1]`, `.read()` |
 | column | member of the row: `[1].appSensorName` | `[1].appSensorName.get()` / `.set(v)` |
@@ -202,7 +202,7 @@ snmpwrap::SessionConfig cfg;
 cfg.peer = "127.0.0.1:161";
 cfg.community = "private";
 auto session = std::make_shared<snmpwrap::Client>(cfg);  // shared: remote keeps it alive
-mib::Remote remote(session);
+mib::RemoteClient remote(session);
 
 std::cout << remote.appName.get() << "\n";
 remote.appSensors.appLimit.set(35);
@@ -412,9 +412,9 @@ mib::registerMib(*agent, backend);                         // or mib::bind(someM
 
 ---
 
-## 5. The client: `Remote`
+## 5. The client: `RemoteClient`
 
-`mib::Remote remote(session)` mirrors `Data` for a device on the network. Nothing is sent until you call `get()`,
+`mib::RemoteClient remote(session)` mirrors `Data` for a device on the network. Nothing is sent until you call `get()`,
 `set()`, `read()`, `create()` or `destroy()`; every call is one SNMP request.
 
 | Call | Does |
@@ -425,6 +425,7 @@ mib::registerMib(*agent, backend);                         // or mib::bind(someM
 | `remote.appSensors.appSensorTable[1].read()` | all columns of one row (`AppSensorEntry`) |
 | `remote.appSensors.appSensorTable.read()` | the whole table, `std::map<Index, Entry>` |
 | `remote.read()` | **everything** in one walk, as the same `Data` structure the agent uses |
+| `remote.appSensors.read()` | one group (or sub-group) in one walk of its subtree: `Data::AppSensorsGroup`, with its scalars, sub-groups and tables |
 | `remote.appSensors.send(msg)` | a subtree as one message: all its writable values in **one** request (all or nothing) |
 | `remote.appSensors.appSensorTable[1].send(row)` | a row as one message |
 | `remote.send(data)` | all writable values of the MIB in one request |
@@ -442,6 +443,7 @@ cfg.peer = "192.168.1.10";                  // port 161 by default; "host:port" 
 cfg.community = "public";                   // v2c (default); cfg.version = SessionConfig::Version::V1 for v1
 cfg.timeout = std::chrono::milliseconds(2000);
 cfg.retries = 1;
+cfg.maxRepetitions = 50;                    // values per GETBULK in walks / read() (default 50; tooBig: halved)
 cfg.localAddress = "192.168.1.5";           // optional own source address (UDP), see section 8
 
 // SNMPv3
@@ -459,16 +461,20 @@ cfg.privProtocol = snmpwrap::SessionConfig::PrivProtocol::AES128; cfg.privPassph
 | Exception | Meaning |
 |---|---|
 | `snmpwrap::SetError` | the value violates the MIB – nothing was sent |
-| `snmpwrap::ResponseError` | the agent refused (`status()`, e.g. `WrongValue`; `index()` = varbind, 1-based) |
-| `snmpwrap::TransportError` | no answer (wrong address, firewall, **wrong community** – it is silently dropped), SNMPv3 failure |
-| `snmpwrap::Error` | e.g. the object or row does not exist on the agent |
+| `snmpwrap::ResponseError` | the agent refused (`status()`, e.g. `WrongValue`; `index()` = varbind, 1-based); the text names the agent and the OID |
+| `snmpwrap::TransportError` | no answer (wrong address, firewall, **wrong community** – it is silently dropped), SNMPv3 failure; the text lists these causes |
+| `snmpwrap::UnexpectedValueError` | the agent answered with a value that does not fit the MIB: another type, or noSuchObject / noSuchInstance (`oid()`, `received()`) |
 
-### Under `Remote`: the flat `mib::Client`
+The texts are meant to be read, e.g. for a simulator that serves a wrong type:
 
-`Remote` is built on a flat typed class, `mib::Client`: one function per object, e.g. `appName()`, `setAppName(v)`,
-`appSensorTable()` (the whole table as a map), `appSensorMode(index)`, `setAppSensorMode(index, v)`. Its `make<Object>(v)`
-returns the checked `snmpwrap::VarBind` without sending anything – the same thing `remote.appName.varbind(v)` does, for
-building requests yourself. Use whichever reads better; both check against the MIB.
+```
+appLimit.0 (1.3.6.1.4.1.99999.2.1.0) from 127.0.0.1:161: the agent sent OctetString: "35", but the MIB defines
+read-write, Integer32 (0..100) - the agent's data does not match the MIB (wrong type in its data, e.g. a simulator's
+.snmprec, or another version of the MIB)
+```
+
+`read()` (of the MIB, a group or a table) does not skip such values: it reads everything and then throws one
+`UnexpectedValueError` that lists every value that did not fit (the first ten).
 
 ### Without a MIB
 
@@ -594,7 +600,7 @@ your own code, until `agent->stop()`. The settings of the agent:
 | `ignoreSigpipe` | `true` | ignore SIGPIPE, so that a vanishing snmpd cannot kill the process (process-wide) |
 
 **Objects are shared.** `Agent`, `Client` and `NotificationReceiver` are created with `std::make_shared`; the classes
-that use them take a `std::shared_ptr` to an interface in their constructor (`DataAgent` a `IRegistry`, `Remote` a
+that use them take a `std::shared_ptr` to an interface in their constructor (`DataAgent` a `IRegistry`, `RemoteClient` a
 `ISession`, `Notifications` a `INotificationSource`, `registerMib()` / `bind()` an `IInstrumentation`) and keep it alive.
 In tests you pass a mock instead (see [Testing](#testing-your-application-the-interfaces-to-mock)). Functions that only
 use an object during the call take a reference: `mib::sendAppLimitExceeded(*agent, …)`.
@@ -667,7 +673,7 @@ cfg.peer = "192.168.1.20";
 cfg.timeout = std::chrono::milliseconds(500);   // a dead device blocks the loop for timeout * (retries + 1)
 cfg.retries = 0;
 auto device = std::make_shared<snmpwrap::Client>(cfg);
-other_mib::Remote remote(device);
+other_mib::RemoteClient remote(device);
 
 while (agent->poll()) {
     try {
@@ -699,7 +705,7 @@ the constructor (or a reference for a single call):
 
 | Interface (`snmpwrap::`) | Pure virtual functions | Real implementation | Used by |
 |---|---|---|---|
-| `ISession` (`ISession.hpp`) | `get(oids)`, `getNext`, `getBulk`, `set(varbinds)`, `walk(root, callback)` | `Client` | `Remote` |
+| `ISession` (`ISession.hpp`) | `get(oids)`, `getNext`, `getBulk`, `set(varbinds)`, `walk(root, callback)` | `Client` | `RemoteClient` |
 | `INotificationSender` (`INotificationSender.hpp`) | `sendTrap(trapOid, vars)` | `Agent` | `send<Name>()` |
 | `INotificationSource` (`INotificationSource.hpp`) | `onNotification(handler)` | `NotificationReceiver` | `Notifications` |
 | `IRegistry` (`IRegistry.hpp`) | `addHandler`, `addMib`, `removeHandler`, `removeMib` | `Agent` | `DataAgent`, `registerMib()` |
@@ -729,7 +735,7 @@ public:
 };
 
 auto session = std::make_shared<MockSession>();
-mib::Remote remote(session);                            // the real generated code, on top of the mock
+mib::RemoteClient remote(session);                      // the real generated code, on top of the mock
 EXPECT_CALL(*session, set(...));
 remote.appSensors.appLimit.set(40);                     // MIB check, OID and value come from the generated code
 ```
@@ -739,7 +745,7 @@ On the agent side `Data` is a plain struct; `DataAgent(std::make_shared<snmpwrap
 the agent makes), and your hooks run exactly as in production. With a mocked `IRegistry` you check what it registers.
 snmpwrap's own tests do all of it:
 [test/generated/DataAgentTest.cpp](../test/generated/DataAgentTest.cpp) (agent side) and
-[test/generated/RemoteTest.cpp](../test/generated/RemoteTest.cpp) (`Remote` on a gmock session).
+[test/generated/RemoteTest.cpp](../test/generated/RemoteTest.cpp) (`RemoteClient` on a gmock session).
 
 ---
 
@@ -917,6 +923,7 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 | send an event | `mib::send<Notification>(agent, …)` |
 | read one value from a device | `remote.<group>.<object>.get()` |
 | read everything at once | `remote.read()` → `mib::Data` |
+| read one group | `remote.<group>.read()` → `mib::Data::<Group>Group` |
 | set several values atomically | `remote.<group>.send(msg)`, `remote.<table>[i].send(row)`, `remote.change().set(…).set(…).send()` |
 | create / delete a row on a device | `remote.<table>.create(index, values)` / `.destroy(index)` (RowStatus tables) |
 | receive events | `snmpwrap::NotificationReceiver` + `mib::Notifications` ([6](#receiving-them-client-side)) |
@@ -955,11 +962,11 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 
 | Class / function | What it does |
 |---|---|
-| `std::make_shared<snmpwrap::Client>(SessionConfig)` | a session to one device: v1 / v2c / v3 (`peer`, `localAddress`, `version`, `community`, `user`, `securityLevel`, `auth…`, `priv…`, `contextName`, `timeout`, `retries`) |
+| `std::make_shared<snmpwrap::Client>(SessionConfig)` | a session to one device: v1 / v2c / v3 (`peer`, `localAddress`, `version`, `community`, `user`, `securityLevel`, `auth…`, `priv…`, `contextName`, `timeout`, `retries`, `maxRepetitions`) |
 | `get(oid)` / `get(oids)`, `getNext(oid)`, `getBulk(oids, nonRepeaters, maxRepetitions)` | read by OID |
 | `set(oid, value)` / `set(varbinds)` | write; several values in one atomic request |
 | `walk(root)` / `walk(root, callback)` | a whole subtree (GETBULK on v2c/v3); the callback can stop early |
-| `mib::Remote(session)` | the device, nested like `Data` (`session`: `std::shared_ptr` to a `ISession`, kept alive) |
+| `mib::RemoteClient(session)` | the device, nested like `Data` (`session`: `std::shared_ptr` to a `ISession`, kept alive) |
 | `remote.<…>.<object>.get()` / `.set(v)` / `.varbind(v)` | one value; `set` checks against the MIB first; `varbind` only builds the checked varbind |
 | `remote.<table>[index]` | one row (or a plain number): cells with `get` / `set`, `read()` all columns, `send(row)` all writable columns, `index()` |
 | `remote.<table>.read()` | the whole table as `std::map<Index, Entry>` |
@@ -967,7 +974,7 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 | `remote.<group>.send(msg)` / `remote.send(data)` | all writable scalars of a subtree / of the MIB in one request (tables not included) |
 | `remote.change().set(target, v)…send()` | any selection of values in one request |
 | `remote.read()` | everything in one walk, as `mib::Data` |
-| `mib::Client(session)` | the flat layer under `Remote` (also `std::shared_ptr<ISession>`): `<object>()`, `set<Object>(v)`, `make<Object>(v)`, `<table>()` |
+| `remote.<group>.read()` | one group in one walk of its subtree, as `mib::Data::<Group>Group` |
 | `std::make_shared<snmpwrap::NotificationReceiver>(address)` | listens for v1 / v2c traps and informs (acknowledges informs) |
 | `receiver->poll(timeout)` / `run()` / `stop()` | process received notifications |
 | `receiver->acceptCommunities({…})` / `onNotification(f)` | accept only these communities / untyped handler (`snmpwrap::Notification`) |
@@ -984,7 +991,7 @@ Use them in `snmpwrap::SetError(snmpwrap::ErrorStatus::…, "reason")`; the numb
 | `mib::Object` | every object with a value, `toString(object)`: the first parameter of the hooks |
 | `snmpwrap::Oid` | `Oid::parse("1.3.6")`, `str()`, `+`, `isPrefixOf()`, `suffixOf()`, `size()`, `[i]` |
 | `snmpwrap::Value` | `Value::integer/gauge/counter32/counter64/timeTicks/string/opaque/bits/oid/ipAddress/null(…)`, `type()`, `as…()`, `str()`, `isException()` |
-| `snmpwrap::Error` | base of all errors; `SetError(status, text)` (refuse / MIB check), `ResponseError` (`status()`, `index()`), `TransportError` |
+| `snmpwrap::Error` | base of all errors; `SetError(status, text)` (refuse / MIB check), `ResponseError` (`status()`, `index()`), `TransportError`, `UnexpectedValueError` (`oid()`, `received()`) |
 | `snmpwrap::MibModel` (interface `IMibInfo`) | read MIB files: `load()`, `node()`, `resolve("name.1")`, `format(varbind)`, `parseValue(name, text)`, `validate()` |
 | `snmpwrap::Mib` (interface `IMibBuilder`), `IHandler` | the core under everything ([appendix](#appendix-a-without-a-mib-core-api)) |
 

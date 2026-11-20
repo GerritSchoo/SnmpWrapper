@@ -43,6 +43,8 @@ public:
         for (auto it = values.upper_bound(root); it != values.end() && root.isPrefixOf(it->first); ++it)
             if (!callback({it->first, it->second})) return;
     }
+    std::string peer() const override { return peerName; }
+    std::string peerName = "fake-agent:161";
 };
 
 class MockSession : public ISession {

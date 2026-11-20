@@ -1,4 +1,4 @@
-// Checks the generated nested client view (snmpwrapper_test_mib::Remote) against a running agent.
+// Checks the generated nested client view (snmpwrapper_test_mib::RemoteClient) against a running agent.
 // Called by run_integration.sh (EXTRA_CHECK) with the agent address; prints "  ok ..." / "  FAIL ..." lines.
 //
 //   remote_client_check <host:port> [notification address]
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     cfg.community = "private";
     try {
         auto session = std::make_shared<snmpwrap::Client>(cfg);
-        Remote remote(session);
+        RemoteClient remote(session);
 
         // notifications: listen first, the agent sends swtAlarm every few seconds (as v2c trap, v1 trap and inform)
         std::shared_ptr<snmpwrap::NotificationReceiver> receiver;
@@ -129,6 +129,25 @@ int main(int argc, char** argv) {
         const Data snapshot = remote.read();
         check(snapshot.swtScalars.swtName == remote.swtScalars.swtName.get(), "read(): scalar in a group");
         check(snapshot.swtTable.size() == 3 && snapshot.swtTable.at(SwtEntryIndex{2}).swtEntryValue == 200, "read(): table rows");
+
+        // one group: only its subtree
+        const Data::SwtScalarsGroup group = remote.swtScalars.read();
+        check(group.swtName == snapshot.swtScalars.swtName && group.swtLimit == snapshot.swtScalars.swtLimit &&
+                  group.swtBigCounter == 4294967297ULL,
+              "group read(): swtScalars");
+
+        // the big table (3000 rows) with tiny and with big GETBULK requests: the same rows
+        snmpwrap::SessionConfig small = cfg;
+        small.maxRepetitions = 3;
+        RemoteClient smallRemote(std::make_shared<snmpwrap::Client>(small));
+        const auto bigTable = remote.swtBigTable.read();
+        const auto bigTableSmall = smallRemote.swtBigTable.read();
+        bool same = bigTableSmall.size() == bigTable.size();
+        for (auto a = bigTable.begin(), b = bigTableSmall.begin(); same && a != bigTable.end(); ++a, ++b)
+            same = a->first == b->first && a->second.swtBigValue == b->second.swtBigValue &&
+                   a->second.swtBigDouble == b->second.swtBigDouble;
+        check(bigTable.size() > 1000 && same,
+              "maxRepetitions 3 and 50 read the same big table (" + std::to_string(bigTable.size()) + " rows)");
         check(snapshot.swtConnTable.at(SwtConnEntryIndex{{10, 0, 0, 2}, 22, "ssh"}).swtConnState == SwtConnState::established,
               "read(): composite index");
         check(snapshot.swtBigTable.size() > 1000, "read(): big table (" + std::to_string(snapshot.swtBigTable.size()) + " rows)");

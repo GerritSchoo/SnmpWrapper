@@ -1,5 +1,6 @@
 #include "Convert.hpp"
 
+#include <cstdio>
 #include <mutex>
 
 #include "snmpwrap/Error.hpp"
@@ -128,7 +129,7 @@ Value fromVar(const netsnmp_variable_list* var) {
         case ASN_OBJECT_ID:
             return Value::oid(fromNetOid(var->val.objid, var->val_len / sizeof(::oid)));
         case ASN_IPADDRESS:
-            if (var->val_len != 4) throw Error("malformed IpAddress");
+            if (var->val_len != 4) throw Error("malformed IpAddress (" + std::to_string(var->val_len) + " bytes, not 4)");
             return Value::ipAddress(var->val.string[0], var->val.string[1], var->val.string[2], var->val.string[3]);
         case ASN_NULL:
             return Value::null();
@@ -139,7 +140,12 @@ Value fromVar(const netsnmp_variable_list* var) {
         case SNMP_ENDOFMIBVIEW:
             return Value::exception(Type::EndOfMibView);
         default:
-            throw Error("unsupported ASN.1 type " + std::to_string(var->type));
+        {
+            char hex[8];
+            std::snprintf(hex, sizeof hex, "0x%02X", static_cast<unsigned>(var->type));
+            throw Error(std::string("ASN.1 type ") + hex + " is no SNMP type (SMIv2: Integer32, OCTET STRING, OBJECT IDENTIFIER, "
+                        "IpAddress, Counter32/64, Gauge32, TimeTicks, Opaque)");
+        }
     }
 }
 

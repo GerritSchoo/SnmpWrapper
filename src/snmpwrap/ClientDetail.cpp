@@ -1,5 +1,7 @@
 #include "ClientDetail.hpp"
 
+#include <algorithm>
+
 #include "Convert.hpp"
 #include "Usm.hpp"
 
@@ -24,6 +26,7 @@ void setPriv(netsnmp_session& sess, ProtocolOid proto) {
 SessionSetup::SessionSetup(const SessionConfig& config) : cfg_(config) {
     if (!cfg_.localAddress.empty() && cfg_.peer.rfind("tcp", 0) == 0)
         throw Error("SessionConfig::localAddress works with UDP peers only, not with " + cfg_.peer);
+    if (cfg_.maxRepetitions < 1) throw Error("SessionConfig::maxRepetitions must be at least 1");
 }
 
 void SessionSetup::configure(netsnmp_session& sess) const {
@@ -80,13 +83,26 @@ ResponseReader::ResponseReader(int requestType, std::size_t requested, std::stri
     : type_(requestType), requested_(requested), peer_(std::move(peer)) {}
 
 std::vector<VarBind> ResponseReader::read(const netsnmp_pdu& resp) const {
-    if (resp.errstat != SNMP_ERR_NOERROR)
+    if (resp.errstat != SNMP_ERR_NOERROR) {
+        // the error-index names the varbind of the request; the response repeats the request's varbinds
+        std::string which;
+        const netsnmp_variable_list* v = resp.variables;
+        for (long i = 1; v && i < resp.errindex; ++i) v = v->next_variable;
+        if (resp.errindex > 0 && v)
+            which = " for " + fromNetOid(v->name, v->name_length).str() + " (varbind " + std::to_string(resp.errindex) + ")";
         throw ResponseError(static_cast<ErrorStatus>(resp.errstat), static_cast<int>(resp.errindex),
-                            std::string("agent returned error: ") + snmp_errstring(static_cast<int>(resp.errstat)));
+                            "agent " + peer_ + " returned error " + snmp_errstring(static_cast<int>(resp.errstat)) + which);
+    }
     std::vector<VarBind> out;
     for (auto* v = resp.variables; v; v = v->next_variable) {
-        Value value = fromVar(v);  // first: GCC < 13 leaks the OID if a later aggregate initializer throws
-        out.push_back({fromNetOid(v->name, v->name_length), std::move(value)});
+        Oid oid = fromNetOid(v->name, v->name_length);
+        Value value;
+        try {
+            value = fromVar(v);
+        } catch (const Error& e) {  // e.g. an Opaque-encoded float of a simulator
+            throw Error("agent " + peer_ + " sent " + oid.str() + " with a value snmpwrap cannot read: " + e.what());
+        }
+        out.push_back({std::move(oid), std::move(value)});
     }
     // GET / GETNEXT / SET answer with exactly the varbinds of the request (RFC 3416 4.2); callers rely on it
     if (type_ != SNMP_MSG_GETBULK && out.size() != requested_)
@@ -97,16 +113,22 @@ std::vector<VarBind> ResponseReader::read(const netsnmp_pdu& resp) const {
 
 // --- Walker ---------------------------------------------------------------------------------------
 
-Walker::Walker(Oid root, bool v1, Fetch fetch) : root_(std::move(root)), v1_(v1), fetch_(std::move(fetch)) {}
+Walker::Walker(Oid root, bool v1, int maxRepetitions, Fetch fetch)
+    : root_(std::move(root)), v1_(v1), maxRepetitions_(v1 ? 1 : std::max(1, maxRepetitions)), fetch_(std::move(fetch)) {}
 
 void Walker::walk(const std::function<bool(const VarBind&)>& callback) const {
     Oid cur = root_;
+    int repetitions = maxRepetitions_;
     for (;;) {
         std::vector<VarBind> batch;
         try {
-            batch = fetch_(cur);
+            batch = fetch_(cur, repetitions);
         } catch (const ResponseError& e) {
             if (v1_ && e.status() == ErrorStatus::NoSuchName) return;  // v1 signals end of MIB this way
+            if (e.status() == ErrorStatus::TooBig && repetitions > 1) {  // the answer does not fit: ask for less
+                repetitions /= 2;
+                continue;
+            }
             throw;
         }
         if (batch.empty()) return;

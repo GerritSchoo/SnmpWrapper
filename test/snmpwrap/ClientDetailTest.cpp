@@ -355,6 +355,21 @@ TEST(ResponseReader, ErrorStatusIsAResponseErrorWithItsIndex) {
     } catch (const ResponseError& e) {
         EXPECT_EQ(e.status(), ErrorStatus::NotWritable);
         EXPECT_EQ(e.index(), 2);
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("agent peer returned error"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("for " + kB.str() + " (varbind 2)"));  // which value was refused
+    }
+}
+
+TEST(ResponseReader, AValueOfAnUnknownTypeNamesTheOidAndTheAgent) {  // e.g. a broken simulator record
+    Response r;
+    r.add(kA, Value::integer(1));
+    r.pdu().variables->type = 0x99;  // no SNMP type
+    try {
+        ResponseReader(SNMP_MSG_GET, 1, "10.0.0.5:161").read(r.pdu());
+        FAIL() << "no Error";
+    } catch (const Error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("agent 10.0.0.5:161 sent " + kA.str()));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("ASN.1 type 0x99 is no SNMP type"));
     }
 }
 
@@ -402,10 +417,12 @@ const Oid kRoot{1, 3, 6, 1, 2, 1, 1};
 struct FakeFetch {
     std::vector<std::vector<VarBind>> batches;
     std::vector<Oid> asked;
+    std::vector<int> repetitions;
     std::size_t next = 0;
     Walker::Fetch fn() {
-        return [this](const Oid& after) {
+        return [this](const Oid& after, int maxRepetitions) {
             asked.push_back(after);
+            repetitions.push_back(maxRepetitions);
             return next < batches.size() ? batches[next++] : std::vector<VarBind>{};
         };
     }
@@ -424,7 +441,7 @@ TEST(Walker, StartsAtTheRootAndContinuesAfterTheLastOid) {
     FakeFetch f;
     f.batches = {{{kRoot + Oid({1, 0}), Value::integer(1)}, {kRoot + Oid({2, 0}), Value::integer(2)}},
                  {{kRoot + Oid({3, 0}), Value::integer(3)}}};
-    const Walker w(kRoot, false, f.fn());
+    const Walker w(kRoot, false, 10, f.fn());
     EXPECT_EQ(walked(w), (std::vector<Oid>{kRoot + Oid({1, 0}), kRoot + Oid({2, 0}), kRoot + Oid({3, 0})}));
     ASSERT_GE(f.asked.size(), 2u);
     EXPECT_EQ(f.asked[0], kRoot);
@@ -434,19 +451,19 @@ TEST(Walker, StartsAtTheRootAndContinuesAfterTheLastOid) {
 TEST(Walker, StopsAtTheEndOfTheSubtree) {
     FakeFetch f;
     f.batches = {{{kRoot + Oid({1, 0}), Value::integer(1)}, {Oid({1, 3, 6, 1, 2, 1, 2, 1, 0}), Value::integer(2)}}};
-    EXPECT_EQ(walked(Walker(kRoot, false, f.fn())), (std::vector<Oid>{kRoot + Oid({1, 0})}));
+    EXPECT_EQ(walked(Walker(kRoot, false, 10, f.fn())), (std::vector<Oid>{kRoot + Oid({1, 0})}));
     EXPECT_EQ(f.asked.size(), 1u);
 }
 
 TEST(Walker, StopsAtEndOfMibView) {
     FakeFetch f;
     f.batches = {{{kRoot + Oid({1, 0}), Value::integer(1)}, {kRoot + Oid({2, 0}), Value::exception(Type::EndOfMibView)}}};
-    EXPECT_EQ(walked(Walker(kRoot, false, f.fn())).size(), 1u);
+    EXPECT_EQ(walked(Walker(kRoot, false, 10, f.fn())).size(), 1u);
 }
 
 TEST(Walker, StopsAtAnEmptyAnswer) {
     FakeFetch f;
-    EXPECT_TRUE(walked(Walker(kRoot, false, f.fn())).empty());
+    EXPECT_TRUE(walked(Walker(kRoot, false, 10, f.fn())).empty());
     EXPECT_EQ(f.asked.size(), 1u);
 }
 
@@ -454,7 +471,7 @@ TEST(Walker, StopsWhenTheCallbackSaysSo) {
     FakeFetch f;
     f.batches = {{{kRoot + Oid({1, 0}), Value::integer(1)}, {kRoot + Oid({2, 0}), Value::integer(2)}}};
     int calls = 0;
-    Walker(kRoot, false, f.fn()).walk([&](const VarBind&) {
+    Walker(kRoot, false, 10, f.fn()).walk([&](const VarBind&) {
         ++calls;
         return false;
     });
@@ -464,18 +481,18 @@ TEST(Walker, StopsWhenTheCallbackSaysSo) {
 TEST(Walker, NonIncreasingOidIsAnError) {  // the walk would never end
     FakeFetch f;
     f.batches = {{{kRoot + Oid({2, 0}), Value::integer(1)}, {kRoot + Oid({1, 0}), Value::integer(2)}}};
-    EXPECT_THROW(walked(Walker(kRoot, false, f.fn())), Error);
+    EXPECT_THROW(walked(Walker(kRoot, false, 10, f.fn())), Error);
 }
 
 TEST(Walker, SameOidTwiceIsAnError) {
     FakeFetch f;
     f.batches = {{{kRoot + Oid({1, 0}), Value::integer(1)}}, {{kRoot + Oid({1, 0}), Value::integer(1)}}};
-    EXPECT_THROW(walked(Walker(kRoot, false, f.fn())), Error);
+    EXPECT_THROW(walked(Walker(kRoot, false, 10, f.fn())), Error);
 }
 
 TEST(Walker, OnV1NoSuchNameIsTheEnd) {
     int calls = 0;
-    const Walker w(kRoot, true, [&](const Oid&) -> std::vector<VarBind> {
+    const Walker w(kRoot, true, 10, [&](const Oid&, int) -> std::vector<VarBind> {
         if (calls++ == 0) return {{kRoot + Oid({1, 0}), Value::integer(1)}};
         throw ResponseError(ErrorStatus::NoSuchName, 1, "end of MIB");
     });
@@ -483,13 +500,48 @@ TEST(Walker, OnV1NoSuchNameIsTheEnd) {
 }
 
 TEST(Walker, OnV2NoSuchNameIsAnError) {
-    const Walker w(kRoot, false, [](const Oid&) -> std::vector<VarBind> { throw ResponseError(ErrorStatus::NoSuchName, 1, "x"); });
+    const Walker w(kRoot, false, 10, [](const Oid&, int) -> std::vector<VarBind> { throw ResponseError(ErrorStatus::NoSuchName, 1, "x"); });
     EXPECT_THROW(walked(w), ResponseError);
 }
 
 TEST(Walker, OtherErrorsArePassedOn) {
-    const Walker w(kRoot, true, [](const Oid&) -> std::vector<VarBind> { throw TransportError("timeout"); });
+    const Walker w(kRoot, true, 10, [](const Oid&, int) -> std::vector<VarBind> { throw TransportError("timeout"); });
     EXPECT_THROW(walked(w), TransportError);
+}
+
+TEST(Walker, AsksForTheConfiguredNumberOfValues) {
+    FakeFetch f;
+    walked(Walker(kRoot, false, 50, f.fn()));
+    EXPECT_EQ(f.repetitions, (std::vector<int>{50}));
+}
+
+TEST(Walker, OnV1OneValuePerRequest) {
+    FakeFetch f;
+    walked(Walker(kRoot, true, 50, f.fn()));
+    EXPECT_EQ(f.repetitions, (std::vector<int>{1}));
+}
+
+TEST(Walker, TooBigIsAskedAgainWithHalfAsManyAndTheWalkGoesOn) {
+    std::vector<int> asked;
+    const Walker w(kRoot, false, 40, [&](const Oid& after, int reps) -> std::vector<VarBind> {
+        asked.push_back(reps);
+        if (reps > 10) throw ResponseError(ErrorStatus::TooBig, 0, "tooBig");
+        if (after == kRoot) return {{kRoot + Oid({1, 0}), Value::integer(1)}};
+        return {};
+    });
+    EXPECT_EQ(walked(w), (std::vector<Oid>{kRoot + Oid({1, 0})}));
+    EXPECT_EQ(asked, (std::vector<int>{40, 20, 10, 10}));  // the smaller size is kept for the rest of the walk
+}
+
+TEST(Walker, TooBigForASingleValueIsPassedOn) {
+    const Walker w(kRoot, false, 4, [](const Oid&, int) -> std::vector<VarBind> { throw ResponseError(ErrorStatus::TooBig, 0, "x"); });
+    EXPECT_THROW(walked(w), ResponseError);
+}
+
+TEST(SessionSetup, MaxRepetitionsBelowOneIsAnError) {
+    SessionConfig cfg;
+    cfg.maxRepetitions = 0;
+    EXPECT_THROW(SessionSetup{cfg}, Error);
 }
 
 }  // namespace

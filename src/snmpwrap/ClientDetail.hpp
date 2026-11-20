@@ -95,23 +95,26 @@ private:
 /// The walk loop of Client::walk(), independent of how the instances are fetched.
 class Walker {
 public:
-    /// Fetches the instances after an OID: one GETNEXT on v1, one GETBULK otherwise.
-    using Fetch = std::function<std::vector<VarBind>(const Oid& after)>;
+    /// Fetches the instances after an OID: one GETNEXT on v1, one GETBULK with @p maxRepetitions otherwise.
+    using Fetch = std::function<std::vector<VarBind>(const Oid& after, int maxRepetitions)>;
 
-    /// @param[in] root Subtree to walk. @param[in] v1 SNMPv1 (end of MIB = ResponseError(NoSuchName)). @param[in] fetch The requests.
-    Walker(Oid root, bool v1, Fetch fetch);
+    /// @param[in] root Subtree to walk. @param[in] v1 SNMPv1 (end of MIB = ResponseError(NoSuchName)).
+    /// @param[in] maxRepetitions Values per request to start with (v1: 1). @param[in] fetch The requests.
+    Walker(Oid root, bool v1, int maxRepetitions, Fetch fetch);
 
     /**
      * @brief Calls @p callback for every instance below the root, in OID order, until the end of the subtree,
      *        EndOfMibView, an empty answer or @p callback returns false.
+     * An answer tooBig is asked again with half as many values (down to 1).
      * @throws Error if the agent returns an OID that is not greater than the previous one (the walk would never end);
-     *         whatever @p fetch throws (except the v1 end of MIB).
+     *         whatever @p fetch throws (except the v1 end of MIB, and tooBig while more than one value was asked for).
      */
     void walk(const std::function<bool(const VarBind&)>& callback) const;
 
 private:
     Oid root_;
     bool v1_;
+    int maxRepetitions_;
     Fetch fetch_;
 };
 

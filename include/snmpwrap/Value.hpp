@@ -9,6 +9,7 @@
 #include <string>
 #include <variant>
 
+#include "snmpwrap/Error.hpp"
 #include "snmpwrap/Oid.hpp"
 
 namespace snmpwrap {
@@ -230,6 +231,47 @@ private:
 struct VarBind {
     Oid oid;      ///< Instance OID, e.g. 1.3.6.1.4.1.99999.1.4.0.
     Value value;  ///< The value (or an exception marker in Client results).
+};
+
+/**
+ * @brief An agent answered with a value that does not fit the MIB: another type than the MIB defines (e.g. a wrong
+ *        type in a simulator's .snmprec), or noSuchObject / noSuchInstance where a value was expected.
+ *
+ * Thrown by the generated RemoteClient. what() names everything needed to find the cause, e.g.
+ * @verbatim
+ *   appLimit.0 (1.3.6.1.4.1.99999.2.1.0) from 127.0.0.1:161: the agent sent OctetString "35", but the MIB defines
+ *   read-write, Integer32 (0..100) - the agent's data does not match the MIB (wrong type in its data, e.g. a
+ *   simulator's .snmprec, or another version of the MIB)
+ * @endverbatim
+ * A read() that walks several values reports all values that do not fit at once (oid() / received() of the first).
+ */
+class UnexpectedValueError : public Error {
+public:
+    /**
+     * @brief One value that does not fit.
+     * @param[in] object   MIB name of the instance, e.g. "appLimit.0" or "appSensorName" (with the row in @p oid).
+     * @param[in] oid      Instance OID the agent answered for.
+     * @param[in] expected What the MIB defines, e.g. "read-write, Integer32 (0..100)".
+     * @param[in] received What the agent sent.
+     * @param[in] peer     The agent's address (ISession::peer()); empty if unknown.
+     */
+    UnexpectedValueError(const std::string& object, const Oid& oid, const std::string& expected, const Value& received,
+                         const std::string& peer);
+
+    /// @brief Several values at once (read()). @param[in] message The whole text. @param[in] oid / received The first one.
+    UnexpectedValueError(const std::string& message, Oid oid, Value received);
+
+    /// @brief The text for one value, without the agent: "<object> (<oid>): the agent sent ..., but the MIB defines ...".
+    static std::string describe(const std::string& object, const Oid& oid, const std::string& expected, const Value& received);
+
+    /// @brief The instance OID of the (first) value. @return The OID.
+    const Oid& oid() const noexcept { return oid_; }
+    /// @brief What the agent sent for it. @return The value (an exception marker for noSuchObject / noSuchInstance).
+    const Value& received() const noexcept { return received_; }
+
+private:
+    Oid oid_;
+    Value received_;
 };
 
 }  // namespace snmpwrap

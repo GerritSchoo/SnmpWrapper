@@ -8,7 +8,7 @@ Verschachtelung. Keine OIDs, keine Net-SNMP-Strukturen, kein Callback pro Objekt
 ```cpp
 // Agent                                              // Client
 auto agent = std::make_shared<snmpwrap::Agent>();     auto session = std::make_shared<snmpwrap::Client>(cfg);
-my_app_mib::Data data;                                my_app_mib::Remote remote(session);
+my_app_mib::Data data;                                my_app_mib::RemoteClient remote(session);
 data.appName = "my-app";                              remote.appSensors.appLimit.set(35);
 data.appSensors.appSensorTable[1].appSensorName = "cpu";   auto name = remote.appSensors.appSensorTable[1].appSensorName.get();
 my_app_mib::DataAgent adapter(agent, data);
@@ -17,7 +17,7 @@ while (agent->poll()) { ... }
 ```
 
 Abhängigkeiten werden als `std::shared_ptr` auf ein Interface im Konstruktor übergeben (`DataAgent` bekommt eine
-`IRegistry`, `Remote` eine `ISession`, `Notifications` eine `INotificationSource`) – in Tests gibt man dort einen Mock hinein.
+`IRegistry`, `RemoteClient` eine `ISession`, `Notifications` eine `INotificationSource`) – in Tests gibt man dort einen Mock hinein.
 
 **Anleitung (Englisch) mit allen Details: [docs/GUIDE.md](docs/GUIDE.md).**
 Vollständiges, getestetes Beispiel: [examples/apps](examples/apps) (`agent_app` und `client_app`).
@@ -26,7 +26,7 @@ Vollständiges, getestetes Beispiel: [examples/apps](examples/apps) (`agent_app`
 
 ```
 MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ──┬── Agent:  Data + DataAgent  (hinter snmpd, AgentX)
-                                                                    └── Client: Remote             (direkt per SNMP)
+                                                                    └── Client: RemoteClient (direkt per SNMP)
 ```
 
 * **Richtung:** Was `read-only` ist, fließt vom Agent zum Client (Status), was `read-write` ist, vom Client zum Agent
@@ -39,7 +39,7 @@ MY-APP-MIB.txt ──(Build: snmpwrap_add_mib)──► my_app_mib.hpp/.cpp ─�
   Die Anfragen bearbeitet `agent->run()`, `agent->poll()` in deiner Schleife – oder `agent->runInBackground()` in einem
   eigenen Thread des Agents; dann dürfen Traps und neue/entfernte `DataAgent`s aus jedem Thread kommen.
 * **Client:** `remote.gruppe.objekt.get()` / `.set(v)`, Tabellen per `[index]`, alles auf einmal mit `remote.read()` (als
-  `Data`). Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
+  `Data`), eine Gruppe mit `remote.gruppe.read()`. Ganze Teilbäume oder Zeilen als eine Nachricht: `remote.gruppe.send(msg)`, `remote.tabelle[i].send(row)`;
   beliebige Werte in einer Anfrage: `remote.change().set(…).set(…).send()`. Werte werden vor dem Senden gegen die MIB geprüft.
 * **Notifications:** Der Agent sendet sie typisiert (`sendAppLimitExceeded(*agent, …)`), der Client empfängt sie typisiert
   (`snmpwrap::NotificationReceiver` + `my_app_mib::Notifications`, `onAppLimitExceeded(…)`) – v1/v2c per Community,
@@ -92,7 +92,7 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
 | Ordner | Inhalt |
 |---|---|
 | `include/snmpwrap/`, `src/snmpwrap/` | die Bibliothek (Kern: `Agent`, `Client`, `Mib`, `MibModel`, …) |
-| `tools/mibgen/` | der Generator `snmpwrap-mibgen` (MIB → `Data`, `DataAgent`, `Remote`, `send…`) |
+| `tools/mibgen/` | der Generator `snmpwrap-mibgen` (MIB → `Data`, `DataAgent`, `RemoteClient`, `send…`) |
 | `cmake/` | `find_package`-Unterstützung, `snmpwrap_add_mib()` |
 | `examples/` | `apps/agent_app`, `apps/client_app` mit `MY-APP-MIB`, dazu das Werkzeug `client_cli` |
 | `test/` | GoogleTest mit einer `test_main.cpp`. Unit-Tests, eine Testdatei pro Quelldatei: `snmpwrap/` (Bibliothek), `mibgen/` (Generator), `generated/` (generierter Code); die Mocks liegen daneben (`<Interface>Mock.hpp`). `integration/`: echte Agent/Client-Objekte und Tests gegen einen eigenen snmpd. Test-MIBs in `mibs/` |
@@ -105,11 +105,11 @@ Statt zu installieren geht auch `add_subdirectory(SnmpWrapper)`. Die Kopiervorla
     kein Agent, kein Client, kein Netz. Bibliothek (`Oid`, `Value`, Index-Kodierung, Fehlerklassen, `ISession`, `Mib` mit
     RowStatus und Rollback, `MibModel`, die Umwandlung von/nach Net-SNMP, die Request-Behandlung des Agenten, das
     Konfigurieren und Auswerten des Clients, das Dekodieren empfangener Notifications), der Generator samt Kommandozeile
-    und der generierte Code (`DataAgent` gegen eine gemockte `IRegistry` / `IMibBuilder`, `Remote` gegen eine gemockte
+    und der generierte Code (`DataAgent` gegen eine gemockte `IRegistry` / `IMibBuilder`, `RemoteClient` gegen eine gemockte
     `ISession`, Notifications, Textausgabe).
   * Integration (Label `integration`, `ctest -L integration`): der echte `Agent` an Net-SNMPs Registrierung, die
     Init-Reihenfolge Agent/Client, die Absenderadresse des Clients, und gegen einen eigenen `snmpd` für v1, v2c und v3
-    (noAuthNoPriv, authNoPriv): mit den Net-SNMP-Tools, `snmpwrap::Client` und dem generierten `Remote`; RowStatus,
+    (noAuthNoPriv, authNoPriv): mit den Net-SNMP-Tools, `snmpwrap::Client` und dem generierten `RemoteClient`; RowStatus,
     Mehrspalten-Index, GETBULK, Rollback, Traps, Abmelden zur Laufzeit (`integration`, `integration_data`) sowie die
     Beispiel-Apps (`apps`).
 * **v3 authPriv** ist in dieser Umgebung nicht verifiziert (das lokale Net-SNMP ist ohne OpenSSL gebaut; der Test meldet SKIP).

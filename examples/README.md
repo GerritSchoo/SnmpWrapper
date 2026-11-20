@@ -3,7 +3,7 @@
 | Program | What it shows |
 |---|---|
 | [apps/agent_app](apps/agent_app) | An application that publishes its data via SNMP: fills the generated `Data` of [MY-APP-MIB](apps/mibs/MY-APP-MIB.txt), serves it with `DataAgent`, reacts to changes (`onSet`), updates values from its own thread and sends a notification. |
-| [apps/client_app](apps/client_app) | An application that reads and changes that data with the generated `Remote`: scalars, a table, enum values, and the three kinds of errors. |
+| [apps/client_app](apps/client_app) | An application that reads and changes that data with the generated `RemoteClient`: scalars, a table, enum values, and the three kinds of errors. |
 | [ClientCli.cpp](ClientCli.cpp) | Command line tool (`get`, `getnext`, `getbulk`, `walk`, `set`) for v1, v2c and v3 with plain OIDs; with `-m <mib>` names and MIB-typed values. |
 
 `agent_app` and `client_app` are **stand-alone CMake projects** – copy one as the skeleton of your own program. They also

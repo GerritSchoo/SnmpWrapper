@@ -236,7 +236,11 @@ void Agent::addHandlerOnLoop(const Oid& root, std::shared_ptr<IHandler> handler)
     nreg->handler->myvoid = reg.get();
 
     const int rc = netsnmp_register_handler(nreg);  // net-snmp owns nreg from here on
-    if (rc != MIB_REGISTERED_OK) throw Error("registering " + root.str() + " failed (code " + std::to_string(rc) + ")");
+    if (rc != MIB_REGISTERED_OK)
+        throw Error("registering " + root.str() + " failed: " +
+                    (rc == MIB_DUPLICATE_REGISTRATION
+                         ? std::string("the subtree is registered already (the same MIB twice, or two MIBs with the same root)")
+                         : "Net-SNMP refused it (code " + std::to_string(rc) + ")"));
     reg->setNetsnmpRegistration(nreg);
     impl_->registrations.push_back(std::move(reg));
 }

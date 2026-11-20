@@ -88,6 +88,21 @@ SessionConfig towards(const UdpSocket& device, const std::string& localAddress =
 /// Sends one GET (it times out: the device never answers).
 void sendOneGet(Client& client) { EXPECT_THROW(client.get(Oid::parse("1.3.6.1.2.1.1.3.0")), TransportError); }
 
+TEST(ClientTimeout, TheMessageNamesTheUsualCauses) {
+    UdpSocket device;  // never answers
+    ASSERT_TRUE(device.ok());
+    SessionConfig cfg = towards(device);
+    cfg.community = "secret";
+    Client client(cfg);
+    try {
+        (void)client.get(Oid::parse("1.3.6.1.2.1.1.3.0"));
+        FAIL() << "no TransportError";
+    } catch (const TransportError& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("timed out (100 ms, 1 tries)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("silently drop a wrong community (\"secret\""));
+    }
+}
+
 TEST(ClientLocalAddress, FixedIpAndPort) {
     UdpSocket device;
     ASSERT_TRUE(device.ok());
